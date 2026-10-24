@@ -639,6 +639,11 @@ function ratiosAt(i){
     ccc:(dso??0)+(dio??0)-(dpo??0)};
 }
 
+// بنود قائمة التدفقات النقدية (الطريقة غير المباشرة) — تُستخدم في العرض والتصدير
+const CF_OP=[['accum_dep','إضافة: الاستهلاك'],['ar','التغير في الذمم المدينة'],['cheques_in','التغير في شيكات برسم التحصيل'],['inventory','التغير في المخزون'],['other_ca','التغير في الموجودات المتداولة الأخرى'],['ap','التغير في ذمم الموردين'],['cheques_out','التغير في الشيكات الآجلة'],['accrued','التغير في المصاريف المستحقة والمطلوبات الأخرى']];
+const CF_INV=[['fixed_assets','شراء/بيع ممتلكات ومعدات'],['other_nca','موجودات غير متداولة أخرى']];
+const CF_FIN=[['st_loans','قروض وتسهيلات بنكية (صافي)'],['lt_loans','قروض طويلة الأجل (صافي)'],['capital','التغير في رأس المال'],['partners','جاري الشركاء / المسحوبات'],['retained','توزيعات وتعديلات على الأرباح المدورة']];
+
 function renderStatements(){
   const a=P.from,b=P.to, len=b-a+1;
   const cur=incomeStatement(a,b), prevOk=a-len>=0, prev=prevOk?incomeStatement(a-len,a-1):null;
@@ -689,9 +694,7 @@ function renderStatements(){
   $('#cfSub').textContent=`من ${monthLabel(M.months[a])} إلى ${monthLabel(M.months[b])}`;
   const d=k=>-(bal(k,b)-bal(k,a-1));   // أثر التغير في البند على النقد
   const np=cur.np;
-  const opItems=[['accum_dep','إضافة: الاستهلاك'],['ar','التغير في الذمم المدينة'],['cheques_in','التغير في شيكات برسم التحصيل'],['inventory','التغير في المخزون'],['other_ca','التغير في الموجودات المتداولة الأخرى'],['ap','التغير في ذمم الموردين'],['cheques_out','التغير في الشيكات الآجلة'],['accrued','التغير في المصاريف المستحقة والمطلوبات الأخرى']];
-  const invItems=[['fixed_assets','شراء/بيع ممتلكات ومعدات'],['other_nca','موجودات غير متداولة أخرى']];
-  const finItems=[['st_loans','قروض وتسهيلات بنكية (صافي)'],['lt_loans','قروض طويلة الأجل (صافي)'],['capital','التغير في رأس المال'],['partners','جاري الشركاء / المسحوبات'],['retained','توزيعات وتعديلات على الأرباح المدورة']];
+  const [opItems,invItems,finItems]=[CF_OP,CF_INV,CF_FIN];
   let ch=`<thead><tr><th>البند</th><th class="num">المبلغ</th></tr></thead><tbody><tr class="sec"><td colspan="2">التدفقات من الأنشطة التشغيلية</td></tr><tr><td class="ind">صافي ربح الفترة</td>${numCell(np)}</tr>`;
   let cfo=np; opItems.forEach(([k,l])=>{const v=d(k); cfo+=v; if(Math.abs(v)>=0.5) ch+=`<tr><td class="ind">${l}</td>${numCell(v)}</tr>`;});
   ch+=`<tr class="tot"><td>صافي النقد من الأنشطة التشغيلية</td>${numCell(cfo)}</tr><tr class="sec"><td colspan="2">التدفقات من الأنشطة الاستثمارية</td></tr>`;
@@ -1810,16 +1813,212 @@ function sampleData(){
 }
 
 /* ---------------- التصدير ---------------- */
+// ملف Excel بمعادلات حيّة: ورقة "الحركات الشهرية" فيها صافي حركة كل بند بكل شهر (مدين − دائن)،
+// والقوائم والأداء الشهري والمقارنة السنوية معادلات SUM عليها؛ التنبؤ مربوط بخلايا الافتراضات.
+// كل معادلة معها قيمتها المحسوبة لأن SheetJS لا يطلب من Excel إعادة الحساب عند فتح الملف.
 function exportExcel(){
   if(!M){ toast('لا توجد بيانات'); return; }
-  const wb=XLSX.utils.book_new();
-  const tbl=id=>{ const t=document.getElementById(id); return t? XLSX.utils.table_to_sheet(t,{raw:false}) : null; };
-  const add=(id,name)=>{ const s=tbl(id); if(s){ s['!views']=[{RTL:true}]; XLSX.utils.book_append_sheet(wb,s,name);} };
   if(!FC) runForecast();
-  add('isTable','قائمة الدخل'); add('bsTable','المركز المالي'); add('cfTable','التدفقات النقدية'); add('monthTable','الأداء الشهري'); add('yoyTable','مقارنة سنوية'); add('fcTable','التنبؤ بالكاش فلو');
-  if(bankRecon()){ add('brTable','مذكرة تسوية البنك'); add('brUnB','بنك غير مسجل بالدفاتر'); add('brUnL','دفاتر لم تظهر بالبنك'); }
-  const al=[...document.querySelectorAll('#alerts .alert')].map(a=>[a.querySelector('.t').textContent,a.querySelector('.x').textContent,a.querySelector('.a').textContent]);
+  const wb=XLSX.utils.book_new(); wb.Workbook={Views:[{RTL:true}]};
+  const NUM='#,##0;(#,##0)', PCT='0.0%';
+  const col=c=>XLSX.utils.encode_col(c), q=sh=>`'${sh}'!`;
+  // ورقة تُعبّأ بالإحداثيات: العمود من 0، والسطر برقمه في Excel
+  const sheet=()=>{ const ws={}, o={ws,mc:0,mr:1,
+    set(c,r,v,f,z){ const cell={t:typeof v==='number'?'n':'s', v:typeof v==='number'?(isFinite(v)?v:0):(v??'')};
+      if(f) cell.f=f; if(z) cell.z=z; ws[col(c)+r]=cell; o.mc=Math.max(o.mc,c); o.mr=Math.max(o.mr,r); }};
+    return o; };
+  const addSheet=(o,name,widths)=>{ o.ws['!ref']=`A1:${col(o.mc)}${o.mr}`; o.ws['!cols']=widths.map(w=>({wch:w})); o.ws['!views']=[{RTL:true}]; XLSX.utils.book_append_sheet(wb,o.ws,name); };
+  const a=P.from, b=P.to, len=b-a+1;
+
+  // --- البيانات: صافي حركة كل بند شهرياً ---
+  const DN='الحركات الشهرية', DQ=q(DN), MC=i=>col(2+i);
+  const dS=sheet(), ROW={};
+  dS.set(0,1,'البند'); dS.set(1,1,'المجموعة'); M.months.forEach((k,i)=>dS.set(2+i,1,monthLabel(k,true)));
+  CATS.forEach(([k,l,g],j)=>{ const r=j+2; ROW[k]=r; dS.set(0,r,l); dS.set(1,r,GROUP_LABEL[g]); for(let i=0;i<M.nM;i++) dS.set(2+i,r,M.catMov[k][i],null,NUM); });
+  const cellD=(k,i)=>`${DQ}${MC(i)}${ROW[k]}`;
+  const S_=(k,x,y)=> y<0||x>y ? '0' : `SUM(${DQ}${MC(Math.max(0,x))}${ROW[k]}:${MC(y)}${ROW[k]})`;   // مجموع حركة بند لأشهر x..y
+  const plR=PL_CATS.map(k=>ROW[k]), plMin=Math.min(...plR), plMax=Math.max(...plR), plOne=plMax-plMin+1===plR.length;
+  const plF=(x,y)=> y<0||x>y ? '0' : plOne ? `SUM(${DQ}${MC(Math.max(0,x))}${plMin}:${MC(y)}${plMax})` : PL_CATS.map(k=>S_(k,x,y)).join('+');
+
+  // --- قائمة الدخل: القيم بإشارة العرض (المصاريف سالبة) فالمجاميع جمع مباشر ---
+  const ISN='قائمة الدخل', isS=sheet(), cur=incomeStatement(a,b), prevOk=a-len>=0, prev=prevOk?incomeStatement(a-len,a-1):null, R={};
+  const isL=[
+    {id:'rev',l:'المبيعات',v:o=>o.rev,f:(c,x,y)=>`-${S_('revenue',x,y)}`},
+    {id:'ret',l:'ينزل: مردودات وخصم المبيعات',neg:1,v:o=>o.ret,f:(c,x,y)=>`-${S_('sales_returns',x,y)}`},
+    {id:'ns',l:'صافي المبيعات',v:o=>o.ns,f:c=>`${c}${R.rev}+${c}${R.ret}`},
+    {id:'cogs',l:'ينزل: تكلفة المبيعات / المشتريات',neg:1,v:o=>o.cogs,f:(c,x,y)=>`-(${S_('cogs',x,y)}+${S_('purchases',x,y)})`},
+    {id:'gp',l:'مجمل الربح',v:o=>o.gp,f:c=>`${c}${R.ns}+${c}${R.cogs}`},
+    ...OPEX.map((k,j)=>({id:'op'+j,l:CAT[k].label,neg:1,v:o=>o.op[j][1],f:(c,x,y)=>`-${S_(k,x,y)}`})),
+    {id:'opex',l:'مجموع المصاريف التشغيلية',neg:1,v:o=>o.opex,f:c=>`SUM(${c}${R.op0}:${c}${R['op'+(OPEX.length-1)]})`},
+    {id:'ebitda',l:'الربح قبل الاستهلاك والفوائد (EBITDA)',v:o=>o.ebitda,f:c=>`${c}${R.gp}+${c}${R.opex}`},
+    {id:'dep',l:'مصروف الاستهلاك',neg:1,v:o=>o.dep,f:(c,x,y)=>`-${S_('depreciation',x,y)}`},
+    {id:'ebit',l:'الربح التشغيلي',v:o=>o.ebit,f:c=>`${c}${R.ebitda}+${c}${R.dep}`},
+    {id:'oi',l:'إيرادات أخرى',v:o=>o.oi,f:(c,x,y)=>`-${S_('other_income',x,y)}`},
+    {id:'fin',l:'مصاريف وفوائد بنكية',neg:1,v:o=>o.fin,f:(c,x,y)=>`-${S_('finance_cost',x,y)}`},
+    {id:'pbt',l:'الربح قبل الضريبة',v:o=>o.pbt,f:c=>`${c}${R.ebit}+${c}${R.oi}+${c}${R.fin}`},
+    {id:'tax',l:'ضريبة الدخل',neg:1,v:o=>o.tax,f:(c,x,y)=>`-${S_('tax',x,y)}`},
+    {id:'np',l:'صافي الربح (الخسارة)',v:o=>o.np,f:c=>`${c}${R.pbt}+${c}${R.tax}`},
+  ];
+  isL.forEach((L,j)=>R[L.id]=j+3);
+  ['البند','الفترة الحالية','% من المبيعات',...(prev?['الفترة السابقة','التغير']:[])].forEach((h,c)=>isS.set(c,1,h));
+  isS.set(0,2,`من ${monthLabel(M.months[a])} إلى ${monthLabel(M.months[b])}`+(prev?` — مقارنة بـ ${monthLabel(M.months[a-len])} إلى ${monthLabel(M.months[a-1])}`:''));
+  isL.forEach(L=>{ const r=R[L.id], sg=L.neg?-1:1, m=L.neg?'-':'', v=L.v(cur);
+    isS.set(0,r,L.l); isS.set(1,r,sg*v,L.f('B',a,b),NUM);
+    isS.set(2,r,cur.ns?v/cur.ns:'',`IF($B$${R.ns}=0,"",${m}B${r}/$B$${R.ns})`,PCT);
+    if(prev){ const pv=L.v(prev); isS.set(3,r,sg*pv,L.f('D',a-len,a-1),NUM);
+      isS.set(4,r,Math.abs(pv)>1?(v-pv)/Math.abs(pv):'',`IF(ABS(D${r})<=1,"",${m}(B${r}-D${r})/ABS(D${r}))`,PCT); }
+  });
+  addSheet(isS,ISN,[40,16,14,16,12]);
+
+  // --- المركز المالي: الرصيد = مجموع الحركات من أول شهر حتى الشهر المطلوب ---
+  const bsS=sheet(), e=b, s0=a-1; let br=3;
+  ['البند','نهاية الفترة','بداية الفترة'].forEach((h,c)=>bsS.set(c,1,h));
+  bsS.set(0,2,`كما في نهاية ${monthLabel(M.months[e])} مقارنة ببداية الفترة`);
+  const bsSect=(g,title,sign)=>{ bsS.set(0,br++,title); const r0=br; let s1=0,s2=0; const m=sign<0?'-':'';
+    CATS.filter(c=>c[2]===g).forEach(([k,l])=>{ const v1=sign*bal(k,e), v2=sign*bal(k,s0); if(Math.abs(v1)<0.5&&Math.abs(v2)<0.5) return;
+      s1+=v1; s2+=v2; bsS.set(0,br,l); bsS.set(1,br,v1,m+S_(k,0,e),NUM); bsS.set(2,br,v2,m+S_(k,0,s0),NUM); br++; });
+    const r1=br-1; return {s1,s2,r0,sum:c=>r1>=r0?`SUM(${c}${r0}:${c}${r1})`:'0'}; };
+  const bsTot=(l,fB,fC,v1,v2)=>{ bsS.set(0,br,l); bsS.set(1,br,v1,fB,NUM); bsS.set(2,br,v2,fC,NUM); return br++; };
+  const A1=bsSect('ca','الموجودات المتداولة',1), rA1=bsTot('مجموع الموجودات المتداولة',A1.sum('B'),A1.sum('C'),A1.s1,A1.s2);
+  const A2=bsSect('nca','الموجودات غير المتداولة',1), rA2=bsTot('مجموع الموجودات غير المتداولة',A2.sum('B'),A2.sum('C'),A2.s1,A2.s2);
+  const rA=bsTot('مجموع الموجودات',`B${rA1}+B${rA2}`,`C${rA1}+C${rA2}`,A1.s1+A2.s1,A1.s2+A2.s2);
+  const L1=bsSect('cl','المطلوبات المتداولة',-1), rL1=bsTot('مجموع المطلوبات المتداولة',L1.sum('B'),L1.sum('C'),L1.s1,L1.s2);
+  const L2=bsSect('ncl','المطلوبات غير المتداولة',-1), rL2=bsTot('مجموع المطلوبات غير المتداولة',L2.sum('B'),L2.sum('C'),L2.s1,L2.s2);
+  const Eq=bsSect('eq','حقوق الملكية',-1), pe1=-sum(PL_CATS.map(k=>bal(k,e))), pe2=-sum(PL_CATS.map(k=>bal(k,s0)));
+  const rPe=bsTot('أرباح غير مقفلة (من حسابات النتيجة)',`-(${plF(0,e)})`,`-(${plF(0,s0)})`,pe1,pe2);
+  const rE=bsTot('مجموع حقوق الملكية',`SUM(B${Eq.r0}:B${rPe})`,`SUM(C${Eq.r0}:C${rPe})`,Eq.s1+pe1,Eq.s2+pe2);
+  const tl1=L1.s1+L2.s1+Eq.s1+pe1, tl2=L1.s2+L2.s2+Eq.s2+pe2;
+  const rTL=bsTot('مجموع المطلوبات وحقوق الملكية',`B${rL1}+B${rL2}+B${rE}`,`C${rL1}+C${rL2}+C${rE}`,tl1,tl2);
+  bsTot('فرق التوازن (يجب أن يكون صفراً)',`B${rA}-B${rTL}`,`C${rA}-C${rTL}`,A1.s1+A2.s1-tl1,A1.s2+A2.s2-tl2);
+  addSheet(bsS,'المركز المالي',[40,16,16]);
+
+  // --- التدفقات النقدية ---
+  const cfS=sheet(); let cr=3;
+  cfS.set(0,1,'البند'); cfS.set(1,1,'المبلغ'); cfS.set(0,2,`من ${monthLabel(M.months[a])} إلى ${monthLabel(M.months[b])}`);
+  const cfRow=(l,v,f)=>{ cfS.set(0,cr,l); cfS.set(1,cr,v,f,NUM); return cr++; };
+  const dV=k=>-(bal(k,b)-bal(k,a-1));
+  const cfItems=list=>{ let last=null; list.forEach(([k,l])=>{ const v=dV(k); if(Math.abs(v)>=0.005) last=cfRow(l,v,`-${S_(k,a,b)}`); }); return last; };
+  const cfSec=(title,list)=>{ cfS.set(0,cr++,title); const r0=cr, last=cfItems(list); return {v:sum(list.map(([k])=>dV(k))), f:last?`SUM(B${r0}:B${last})`:'0'}; };
+  cfS.set(0,cr++,'التدفقات من الأنشطة التشغيلية');
+  const rNp=cfRow('صافي ربح الفترة',cur.np,`${q(ISN)}B${R.np}`), lo=cfItems(CF_OP);
+  const cfo=cur.np+sum(CF_OP.map(([k])=>dV(k)));
+  const rCfo=cfRow('صافي النقد من الأنشطة التشغيلية',cfo,`SUM(B${rNp}:B${lo??rNp})`);
+  const Ci=cfSec('التدفقات من الأنشطة الاستثمارية',CF_INV), rCfi=cfRow('صافي النقد من الأنشطة الاستثمارية',Ci.v,Ci.f);
+  const Cf=cfSec('التدفقات من الأنشطة التمويلية',CF_FIN), rCff=cfRow('صافي النقد من الأنشطة التمويلية',Cf.v,Cf.f);
+  const net=cfo+Ci.v+Cf.v, c0=bal('cash',a-1);
+  const rNet=cfRow('صافي التغير في النقد',net,`B${rCfo}+B${rCfi}+B${rCff}`);
+  const rOp=cfRow('النقد أول الفترة',c0,S_('cash',0,a-1));
+  const rEnd=cfRow('النقد آخر الفترة',c0+net,`B${rOp}+B${rNet}`);
+  const rAct=cfRow('رصيد النقد الفعلي بالدفاتر',bal('cash',b),S_('cash',0,b));
+  cfRow('الفرق (يجب أن يكون صفراً)',bal('cash',b)-(c0+net),`B${rAct}-B${rEnd}`);
+  addSheet(cfS,'التدفقات النقدية',[44,16]);
+
+  // --- الأداء الشهري ---
+  const mS=sheet(), mRows=[['صافي المبيعات','netSales'],['المشتريات','purch'],['تكلفة المبيعات','cogs'],['مجمل الربح','gp'],...OPEX.map(k=>[CAT[k].label,k]),['الاستهلاك','dep'],['مصاريف بنكية','fin'],['إيرادات أخرى','otherInc'],['صافي الربح','np'],['الرصيد النقدي','cash']];
+  const MR={}; mRows.forEach(([,k],j)=>MR[k]=j+2);
+  const mF={netSales:i=>`-(${cellD('revenue',i)}+${cellD('sales_returns',i)})`, purch:i=>M.periodic?cellD('purchases',i):`${cellD('cogs',i)}+${cellD('inventory',i)}`,
+    cogs:i=>`${cellD('cogs',i)}+${cellD('purchases',i)}`, gp:(i,c)=>`${c}${MR.netSales}-${c}${MR.cogs}`, dep:i=>cellD('depreciation',i), fin:i=>cellD('finance_cost',i),
+    otherInc:i=>`-${cellD('other_income',i)}`, np:i=>`-(${plF(i,i)})`, cash:i=>S_('cash',0,i)};
+  OPEX.forEach(k=>mF[k]=i=>cellD(k,i));
+  mS.set(0,1,'البند'); for(let j=0;j<len;j++) mS.set(1+j,1,monthLabel(M.months[a+j],true)); mS.set(1+len,1,'المجموع');
+  mRows.forEach(([l,k])=>{ const r=MR[k]; mS.set(0,r,l);
+    for(let j=0;j<len;j++) mS.set(1+j,r,M.ser[k][a+j],mF[k](a+j,col(1+j)),NUM);
+    if(k!=='cash') mS.set(1+len,r,serSum(k,a,b),`SUM(B${r}:${col(len)}${r})`,NUM); });
+  addSheet(mS,'الأداء الشهري',[30,...Array(len+1).fill(12)]);
+
+  // --- مقارنة سنوية (آخر ١٢ شهراً بالـ ١٢ التي قبلها) ---
+  const yS=sheet();
+  if(e>=23){
+    const yRows=[['صافي المبيعات','netSales'],['تكلفة المبيعات','cogs'],['المشتريات','purch'],['مجمل الربح','gp'],...OPEX.map(k=>[CAT[k].label,k]),['مصاريف بنكية','fin'],['إجمالي المصاريف التشغيلية','opex'],['صافي الربح','np']];
+    const YR={}; yRows.forEach(([,k],j)=>YR[k]=j+2);
+    const yF={netSales:(x,y)=>`-(${S_('revenue',x,y)}+${S_('sales_returns',x,y)})`, cogs:(x,y)=>`${S_('cogs',x,y)}+${S_('purchases',x,y)}`,
+      purch:(x,y)=>M.periodic?S_('purchases',x,y):`${S_('cogs',x,y)}+${S_('inventory',x,y)}`, gp:(x,y,c)=>`${c}${YR.netSales}-${c}${YR.cogs}`,
+      fin:(x,y)=>S_('finance_cost',x,y), opex:(x,y,c)=>OPEX.map(k=>`${c}${YR[k]}`).join('+'), np:(x,y)=>`-(${plF(x,y)})`};
+    OPEX.forEach(k=>yF[k]=(x,y)=>S_(k,x,y));
+    ['البند',`${monthLabel(M.months[e-23],true)} – ${monthLabel(M.months[e-12],true)}`,`${monthLabel(M.months[e-11],true)} – ${monthLabel(M.months[e],true)}`,'النمو','مقارنة بنمو المبيعات'].forEach((h,c)=>yS.set(c,1,h));
+    const g_=k=>{ const v0=serSum(k,e-23,e-12); return v0?(serSum(k,e-11,e)-v0)/Math.abs(v0):null; }, sg=g_('netSales');
+    yRows.forEach(([l,k])=>{ const r=YR[k], g=g_(k), isCost=!['netSales','gp','np'].includes(k);
+      yS.set(0,r,l); yS.set(1,r,serSum(k,e-23,e-12),yF[k](e-23,e-12,'B'),NUM); yS.set(2,r,serSum(k,e-11,e),yF[k](e-11,e,'C'),NUM);
+      yS.set(3,r,g??'',`IF(B${r}=0,"",(C${r}-B${r})/ABS(B${r}))`,PCT);
+      if(isCost) yS.set(4,r,g==null?'':(g>(sg??0)+0.03?'أسرع من المبيعات ⚠':'ضمن الحد'),`IF(D${r}="","",IF(D${r}>IF(D${YR.netSales}="",0,D${YR.netSales})+0.03,"أسرع من المبيعات ⚠","ضمن الحد"))`); });
+  } else yS.set(0,1,`تحتاج ٢٤ شهراً من البيانات على الأقل لهذه المقارنة (المتوفر ${M.nM}).`);
+  addSheet(yS,'مقارنة سنوية',[30,18,18,10,22]);
+
+  // --- التنبؤ بالكاش فلو: الافتراضات بخلايا B2:B11 وكل الجدول معادلات عليها ---
+  const F=FC, n=F.keys.length, fc=S.fc, fS=sheet(), A_={};
+  const SB=salesBasis(b), baseSales=project(SB.hist,+M.months[SB.h0].slice(5)-1,n,fc.trend,fc.season);
+  const H=Math.min(6,b+1), hs=b-H+1, pastSales=SB.hist.slice(-H), pastPurch=M.ser.purch.slice(hs,b+1);
+  fS.set(0,1,'افتراضات التنبؤ'); fS.set(1,1,'القيمة');
+  [['salesAdj','تعديل المبيعات عن الاتجاه',fc.salesAdj/100,PCT],['purchPct','المشتريات كنسبة من المبيعات',F.purchPct,PCT],['costAdj','ارتفاع كلفة البضاعة',fc.costAdj/100,PCT],
+   ['infl','تضخم المصاريف التشغيلية',fc.inflation/100,PCT],['raise','زيادة الرواتب',fc.raise/100,PCT],['raiseM','زيادة الرواتب تبدأ من شهر التنبؤ رقم',fc.raiseMonth,'0'],
+   ['dso','أيام تحصيل العملاء',F.dso,'0'],['dpo','أيام السداد للموردين',F.dpo,'0'],['open','رصيد النقد في بداية التنبؤ',F.openCash,NUM],['buffer','الحد الأدنى الآمن للنقد',F.buffer,NUM]]
+    .forEach(([k,l,v,z],j)=>{ fS.set(0,j+2,l); fS.set(1,j+2,v,null,z); A_[k]=`$B$${j+2}`; });
+  fS.set(0,12,'غيّر الخلايا B2:B11 وكل الجدول بيتحدّث. "المبيعات قبل التعديل" محسوبة بالتطبيق (اتجاه النمو والموسمية) وهي أرقام ثابتة.');
+  const FCc=k=>col(1+H+k), HR=14, NR=15; let tr=16;
+  fS.set(0,HR,'البند'); for(let j=0;j<H;j++) fS.set(1+j,HR,monthLabel(M.months[hs+j],true)+' (فعلي)');
+  F.keys.forEach((k,i)=>{ fS.set(1+H+i,HR,monthLabel(k,true)); fS.set(1+H+i,NR,i+1); }); fS.set(1+H+n,HR,'مجموع التنبؤ'); fS.set(0,NR,'رقم شهر التنبؤ');
+  const fRow=(l,fut,futF,past,total=true)=>{ const r=tr++; fS.set(0,r,l); (past||[]).forEach((v,j)=>fS.set(1+j,r,v,null,NUM));
+    for(let k=0;k<n;k++) fS.set(1+H+k,r,fut[k],futF?futF(k,FCc(k),r):null,NUM);
+    if(total) fS.set(1+H+n,r,sum(fut),`SUM(${FCc(0)}${r}:${FCc(n-1)}${r})`,NUM); return r; };
+  const fSec=l=>fS.set(0,tr++,l);
+  // التحصيل/السداد بعد مدة (أيام/30) شهراً موزّعة على شهرين متتاليين — نفس lagged() على صف (فعلي + متوقع)
+  const lagF=(r,days,k)=>{ const p=H+k+1, rr=`$B$${r}:$${FCc(n-1)}$${r}`, L=`INT(${days}/30)`, W=`(${days}/30-INT(${days}/30))`;
+    return `IF(${p}-${L}<1,0,INDEX(${rr},1,${p}-${L}))*(1-${W})+IF(${p}-${L}-1<1,0,INDEX(${rr},1,${p}-${L}-1))*${W}`; };
+  const avgF=(k,neg)=>`MAX(0,${neg?'-':''}AVERAGE(${DQ}${MC(Math.max(0,b-5))}${ROW[k]}:${MC(b)}${ROW[k]}))`;
+  fSec('الأساس');
+  const rBase=fRow('المبيعات قبل التعديل (اتجاه وموسمية)',baseSales);
+  const rSales=fRow('المبيعات (فعلي ثم متوقع)',F.sales,(k,c)=>`${c}${rBase}*(1+${A_.salesAdj})`,pastSales);
+  const rPurch=fRow('المشتريات (فعلي ثم متوقع)',F.purch,(k,c)=>`${c}${rSales}*${A_.purchPct}*(1+${A_.costAdj})`,pastPurch);
+  const rChqIn=F.useChq?fRow('شيكات واردة مستحقة',F.chqIn):null, rChqOut=F.useChq?fRow('شيكات صادرة مستحقة',F.chqOut):null;
+  fSec('المقبوضات');
+  const rColl=fRow('التحصيلات من العملاء',F.coll,(k,c)=>F.useChq?`MAX(${lagF(rSales,A_.dso,k)},${c}${rChqIn})`:lagF(rSales,A_.dso,k));
+  fRow('إيرادات أخرى',F.oiF,()=>avgF('other_income',true));
+  if(sum(F.cmIn)) fRow('مقبوضات أخرى / تمويل',F.cmIn);
+  const lastIn=tr-1, rIn=fRow('مجموع المقبوضات',F.inflow,(k,c)=>`SUM(${c}${rColl}:${c}${lastIn})`);
+  fSec('المدفوعات');
+  const rSupp=fRow('دفعات الموردين والشيكات',F.supp,(k,c)=>F.useChq?`MAX(${lagF(rPurch,A_.dpo,k)},${c}${rChqOut})`:lagF(rPurch,A_.dpo,k));
+  OPEX.forEach(k=>fRow(CAT[k].label,F.opexF[k],(i,c)=>`${avgF(k)}*(1+${A_.infl})`+(k==='salaries'?`*IF(${c}$${NR}>=${A_.raiseM},1+${A_.raise},1)`:'')));
+  fRow('مصاريف وفوائد بنكية',F.finF,()=>avgF('finance_cost'));
+  F.autoRows.forEach(x=>fRow(x.name,x.vals));
+  F.cmRows.filter(x=>x.type!=='in').forEach(x=>fRow(x.name,x.vals));
+  const lastOut=tr-1, rOut=fRow('مجموع المدفوعات',F.outflow,(k,c)=>`SUM(${c}${rSupp}:${c}${lastOut})`);
+  const rNetF=fRow('صافي التدفق النقدي',F.inflow.map((v,i)=>v-F.outflow[i]),(k,c)=>`${c}${rIn}-${c}${rOut}`);
+  fRow('الرصيد أول الشهر',F.open,(k,c,r)=>k?`${FCc(k-1)}${r+1}`:A_.open,null,false);
+  const rClose=fRow('الرصيد آخر الشهر',F.close,(k,c,r)=>`${c}${r-1}+${c}${rNetF}`,null,false);
+  const cR=`${FCc(0)}${rClose}:${FCc(n-1)}${rClose}`; tr++;
+  [['أدنى رصيد متوقع',F.minC,`MIN(${cR})`],['الرصيد في نهاية التنبؤ',F.close[n-1],`${FCc(n-1)}${rClose}`],
+   ['أشهر تحت الحد الآمن',F.close.filter(v=>v<F.buffer).length,`COUNTIF(${cR},"<"&${A_.buffer})`],['التمويل الإضافي المطلوب',F.need,`MAX(0,${A_.buffer}-MIN(${cR}))`]]
+    .forEach(([l,v,f])=>{ fS.set(0,tr,l); fS.set(1,tr,v,f,NUM); tr++; });
+  addSheet(fS,'التنبؤ بالكاش فلو',[40,...Array(H+n+1).fill(12)]);
+
+  // --- مطابقة البنك: البنود غير المطابقة كاملة، والمذكرة SUMIF عليها ---
+  const BR=bankRecon();
+  if(BR){
+    const listSheet=(rows,name,h3,v3)=>{ const o=sheet(); ['التاريخ','البيان',h3,'المبلغ'].forEach((h,c)=>o.set(c,1,h));
+      rows.forEach((x,j)=>{ o.set(0,j+2,x.d); o.set(1,j+2,x.desc||''); o.set(2,j+2,v3(x)||''); o.set(3,j+2,x.amt,null,NUM); });
+      const last=rows.length+1; o.set(1,last+1,'المجموع'); o.set(3,last+1,sum(rows.map(x=>x.amt)),last>=2?`SUM(D2:D${last})`:'0',NUM);
+      addSheet(o,name,[12,50,16,14]); return last>=2?`${q(name)}D2:D${last}`:null; };
+    const brS=sheet(), uB='بنك غير مسجل بالدفاتر', uL='دفاتر لم تظهر بالبنك';
+    brS.set(0,1,`مذكرة تسوية البنك كما في ${BR.E} — الكشف من ${BR.St}`);
+    const sif=(rr,op,v)=>[v, rr?`SUMIF(${rr},"${op}0")`:'0'];
+    // نبني القوائم أولاً (تُضاف بعد المذكرة بالترتيب)
+    const memo=()=>{
+      const rows=[['جهة البنك'],['الرصيد حسب كشف البنك',BR.bankClose??'',null],['يُضاف: إيداعات في الطريق (في الدفاتر ولم تظهر في البنك)',...sif(rL,'>',BR.dit)],['يُطرح: شيكات ودفعات لم تُصرف بعد',...sif(rL,'<',BR.oc)],
+        ['الرصيد المعدّل للبنك',BR.adjBank??'','IF(B3="","",SUM(B3:B5))'],['جهة الدفاتر (Solid Soft)'],['الرصيد حسب الدفاتر',BR.bookClose,null],
+        ['يُضاف: إيداعات في البنك غير مسجلة (تسويات بطاقات، حوالات...)',...sif(rB,'>',BR.bCr)],['يُطرح: خصومات البنك غير المسجلة (عمولات، رسوم...)',...sif(rB,'<',BR.bDr)],
+        ['الرصيد المعدّل للدفاتر',BR.adjBook,'SUM(B8:B10)'],['الفرق',BR.adjBank!=null?BR.adjBank-BR.adjBook:'','IF(B6="","",B6-B11)']];
+      rows.forEach(([l,v,f],j)=>{ brS.set(0,j+2,l); if(v!==undefined) brS.set(1,j+2,v,f,NUM); });
+      if(BR.bankClose==null) brS.set(0,14,'الكشف بلا عمود رصيد: اكتب الرصيد الختامي بالخلية B3 ليكتمل جانب البنك.');
+      addSheet(brS,'مذكرة تسوية البنك',[58,16]); };
+    const tmp=wb.SheetNames.length;
+    const rB=listSheet(BR.unB,uB,'المرجع',x=>x.ref), rL=listSheet(BR.unL,uL,'القيد',x=>x.j);
+    memo();
+    wb.SheetNames.splice(tmp,0,wb.SheetNames.pop());   // المذكرة قبل القوائم
+  }
+
+  const al=[...document.querySelectorAll('#alerts .alert')].map(x=>[x.querySelector('.t').textContent,x.querySelector('.x').textContent,x.querySelector('.a').textContent]);
   const ws=XLSX.utils.aoa_to_sheet([['التحدي','التفاصيل','الإجراء المقترح'],...al]); ws['!views']=[{RTL:true}]; XLSX.utils.book_append_sheet(wb,ws,'التحديات');
+  addSheet(dS,DN,[34,20,...Array(M.nM).fill(11)]);
   XLSX.writeFile(wb,`تحليل مالي ${M.months[P.to]}.xlsx`);
 }
 
