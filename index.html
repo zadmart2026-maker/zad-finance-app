@@ -315,7 +315,7 @@
       <div class="row no-print" style="margin-top:10px;align-items:flex-end">
         <div class="field"><label for="fcNewName">بند جديد</label><input class="inp" id="fcNewName" placeholder="مثال: إيجار مستودع جديد"></div>
         <div class="field"><label for="fcNewType">النوع</label><select class="inp" id="fcNewType"><option value="out">مدفوعات</option><option value="in">مقبوضات</option></select></div>
-        <div class="field"><label for="fcNewAmt">مبلغ شهري (اختياري)</label><input class="inp" id="fcNewAmt" type="number" style="direction:ltr;width:130px"></div>
+        <div class="field"><label for="fcNewAmt">مبلغ شهري (اختياري)</label><input class="inp" id="fcNewAmt" type="text" inputmode="decimal" style="direction:ltr;width:130px"></div>
         <button class="btn sm primary" id="fcNewAdd">+ إضافة البند للجدول</button>
       </div>
     </div>
@@ -962,8 +962,8 @@ function renderForecastInputs(){
     `<div class="field"><label>زيادة الرواتب تبدأ من</label><select id="fRaiseM">${Array.from({length:f.horizon},(_,i)=>`<option value="${i+1}" ${i+1==f.raiseMonth?'selected':''}>${monthLabel(addMonths(M.months[P.to],i+1))}</option>`).join('')}</select></div>`,
     fcInput('fDso','أيام تحصيل العملاء',f.dso??Math.round(clamp(r.dso??0,0,180)),0,180,1,' يوم',`(فعلي ${r.dso!=null?Math.round(r.dso):'—'})`),
     fcInput('fDpo','أيام السداد للموردين',f.dpo??Math.round(clamp(r.dpo??0,0,180)),0,180,1,' يوم',`(فعلي ${r.dpo!=null?Math.round(r.dpo):'—'})`),
-    `<div class="field"><label>رصيد النقد في بداية التنبؤ</label><input type="number" id="fOpenCash" placeholder="تلقائي من الدفاتر" value="${f.openCash??''}" style="direction:ltr"><div class="val muted">فارغ = من Solid Soft${S.bank?.rows.length?' / مطابقة البنك':''}</div></div>`,
-    `<div class="field"><label>الحد الأدنى الآمن للنقد</label><input type="number" id="fBuffer" placeholder="تلقائي = مصاريف شهر" value="${f.buffer??''}" style="direction:ltr"></div>`,
+    `<div class="field"><label>رصيد النقد في بداية التنبؤ</label><input type="text" inputmode="decimal" id="fOpenCash" placeholder="تلقائي من الدفاتر" value="${f.openCash??''}" style="direction:ltr"><div class="val muted">فارغ = من Solid Soft${S.bank?.rows.length?' / مطابقة البنك':''}</div></div>`,
+    `<div class="field"><label>الحد الأدنى الآمن للنقد</label><input type="text" inputmode="decimal" id="fBuffer" placeholder="تلقائي = مصاريف شهر" value="${f.buffer??''}" style="direction:ltr"></div>`,
   ].join('');
   const bind=(id,key,conv=Number)=>{ const el=$('#'+id); el.addEventListener('input',()=>{ S.fc[key]=conv(el.value); const v=$('#'+id+'V'); if(v) v.textContent=el.value; S.fc.scn='custom'; markScn(); refreshForecast(); }); };
   bind('fSalesAdj','salesAdj'); bind('fPurch','purchPct'); bind('fCost','costAdj'); bind('fInfl','inflation'); bind('fRaise','raise'); bind('fDso','dso'); bind('fDpo','dpo');
@@ -974,8 +974,8 @@ function renderForecastInputs(){
   if($('#fPos')) $('#fPos').onchange=e=>{S.fc.usePos=e.target.checked; S.fc.purchPct=null; renderForecastInputs(); refreshForecast();};
   if($('#fChq')) $('#fChq').onchange=e=>{S.fc.useCheques=e.target.checked; refreshForecast();};
   if($('#fBank')) $('#fBank').onchange=e=>{S.fc.useBank=e.target.checked; refreshForecast();};
-  $('#fBuffer').onchange=e=>{S.fc.buffer=e.target.value===''?null:+e.target.value; refreshForecast();};
-  $('#fOpenCash').onchange=e=>{S.fc.openCash=e.target.value===''?null:+e.target.value; refreshForecast();};
+  $('#fBuffer').onchange=e=>{ const v=numInput(e.target); if(v===undefined) return; S.fc.buffer=v; refreshForecast(); };
+  $('#fOpenCash').onchange=e=>{ const v=numInput(e.target); if(v===undefined) return; S.fc.openCash=v; refreshForecast(); };
   markScn();
 }
 function markScn(){ document.querySelectorAll('#scnBtns .btn').forEach(b=>b.classList.toggle('on',b.dataset.scn===S.fc.scn)); }
@@ -994,13 +994,14 @@ function renderCommitments(){
   S.commitments.forEach((c,i)=>{
     h+=`<tr data-i="${i}"><td><input class="inp" data-k="name" value="${esc(c.name)}" style="width:100%;min-width:160px"></td>
       <td><select class="inp" data-k="type"><option value="out" ${c.type!=='in'?'selected':''}>مدفوعات</option><option value="in" ${c.type==='in'?'selected':''}>مقبوضات</option></select></td>
-      <td><input class="inp" type="number" data-k="amount" value="${c.amount||0}" style="width:110px;direction:ltr"></td>
+      <td><input class="inp" type="text" inputmode="decimal" data-k="amount" value="${c.amount||0}" style="width:110px;direction:ltr"></td>
       <td><select class="inp" data-k="start">${opts.map(([v,l])=>`<option value="${v}" ${v==c.start?'selected':''}>${l}</option>`).join('')}</select></td>
       <td><select class="inp" data-k="repeat">${[['once','مرة واحدة'],['monthly','شهري'],['quarterly','كل ٣ أشهر'],['yearly','سنوي']].map(([v,l])=>`<option value="${v}" ${v===c.repeat?'selected':''}>${l}</option>`).join('')}</select></td>
       <td class="no-print"><button class="btn sm danger" data-del="${i}">حذف</button></td></tr>`;
   });
   $('#cmTable').innerHTML=h+'</tbody>';
-  $('#cmTable').querySelectorAll('[data-k]').forEach(el=>el.addEventListener('change',()=>{const i=+el.closest('tr').dataset.i; const k=el.dataset.k; S.commitments[i][k]=(k==='amount'||k==='start')?+el.value:el.value; refreshForecast(true);}));
+  $('#cmTable').querySelectorAll('[data-k]').forEach(el=>el.addEventListener('change',()=>{const i=+el.closest('tr').dataset.i; const k=el.dataset.k;
+    if(k==='amount'){ const v=numInput(el); if(v===undefined) return; S.commitments[i][k]=v??0; } else S.commitments[i][k]=k==='start'?+el.value:el.value; refreshForecast(true);}));
   $('#cmTable').querySelectorAll('[data-del]').forEach(el=>el.onclick=()=>{S.commitments.splice(+el.dataset.del,1); refreshForecast();});
   const auto=autoItemsCalc(P.to);
   $('#autoItems').innerHTML=`<div class="row">${Object.entries(auto).map(([k,o])=>`<label style="font-size:13px"><input type="checkbox" data-auto="${k}" ${S.fc.auto[k]?'checked':''} ${o.amount>0?'':'disabled'}> ${o.label}: <b class="num">${fmt(o.amount)}</b> شهرياً${k==='loans'&&o.cap>0?` <span class="muted">(رصيد القروض ${fmt(o.cap)})</span>`:''}</label>`).join('')}</div>`;
@@ -1110,11 +1111,13 @@ function bindFcTable(){
     const rs=ev.target.closest('[data-ovreset]'); if(rs){ delete S.fc.ov[rs.dataset.ovreset]; refreshForecast(true); return; }
     const cd=ev.target.closest('[data-cdel]'); if(cd){ S.fc.custom.splice(+cd.dataset.cdel,1); refreshForecast(true); return; }
     const dr=ev.target.closest('[data-drill]'); if(dr){ const k=dr.dataset.drill; fcOpen.has(k)?fcOpen.delete(k):fcOpen.add(k); renderFcTable(); return; }
-    const td=ev.target.closest('td[data-ed]'); if(td && !td.querySelector('input')) fcEditCell(td);
+    const td=ev.target.closest('td[data-ed]'); if(td && !td.querySelector('input')){ fcEditCell(td); return; }
+    const nc=ev.target.closest('tbody td.num'); if(nc) toast(nc.closest('tr.det')?'تفاصيل الحسابات للعرض — عدّل رقم البند نفسه':'هذا الرقم مجموع أو رصيد محسوب — عدّل البنود التي فوقه');
   });
   $('#fcNewAdd').onclick=()=>{
     const name=$('#fcNewName').value.trim(); if(!name){ toast('اكتب اسم البند'); $('#fcNewName').focus(); return; }
-    const amt=$('#fcNewAmt').value.trim(), vals={};
+    const amt=cleanNum($('#fcNewAmt').value), vals={};
+    if(amt==null){ toast('المبلغ الشهري غير صحيح — اكتب أرقاماً فقط'); $('#fcNewAmt').focus(); return; }
     if(amt!=='') FC.keys.forEach(k=>vals[k]=+amt);
     (S.fc.custom||(S.fc.custom=[])).push({name,type:$('#fcNewType').value,vals});
     $('#fcNewName').value=''; $('#fcNewAmt').value='';
@@ -1123,17 +1126,32 @@ function bindFcTable(){
 }
 function fcEditCell(td){
   const key=td.dataset.ed, i=+td.dataset.i, mk=FC.keys[i], old=Math.round(+td.dataset.v*100)/100;
-  td.innerHTML=`<input class="inp fc-in" type="number" step="any" value="${old}">`;
+  // حقل نصي (مش number): حقل الأرقام يرفض الأرقام العربية ١٢٣ والفواصل ويرجع فاضي بصمت
+  td.innerHTML=`<input class="inp fc-in" type="text" inputmode="decimal" value="${old}">`;
   const inp=td.querySelector('input'); inp.focus(); inp.select();
   let done=false;
-  const commit=save=>{ if(done) return; done=true;
-    const s=inp.value.trim();
+  const commit=(save,blur)=>{ if(done) return;
+    const s=cleanNum(inp.value);
+    if(save && s==null){ toast('الرقم غير صحيح — اكتب أرقاماً فقط'); if(!blur){ inp.focus(); return; } save=false; }
+    done=true;
     if(!save || (s!=='' && +s===old && !FC.ovIdx[key]?.has(i))){ renderFcTable(); return; }
     if(key.startsWith('custom:')){ const c=S.fc.custom[+key.slice(7)]; c.vals=c.vals||{}; if(s==='') delete c.vals[mk]; else c.vals[mk]=+s; }
     else { const o=S.fc.ov[key]||(S.fc.ov[key]={}); if(s==='') delete o[mk]; else o[mk]=+s; if(!Object.keys(o).length) delete S.fc.ov[key]; }
     refreshForecast(true); };
   inp.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); commit(true); } else if(e.key==='Escape') commit(false); });
-  inp.addEventListener('blur',()=>commit(true));
+  inp.addEventListener('blur',()=>commit(true,true));
+}
+// نص رقم من المستخدم → نص رقم إنجليزي ('' = فاضي، null = غير صالح). يقبل ١٢٣ والفواصل والأقواس للسالب
+function cleanNum(v){
+  let s=deArDigits(v).replace(/[,\s]/g,'').trim();
+  if(/^\(.*\)$/.test(s)) s='-'+s.slice(1,-1);
+  return s===''||/^-?(\d+\.?\d*|\.\d+)$/.test(s) ? s : null;
+}
+// قيمة خانة رقم: null = فاضي، undefined = غير صالح (مع رسالة)، وإلا الرقم
+function numInput(el){
+  const s=cleanNum(el.value);
+  if(s==null){ toast('الرقم غير صحيح — اكتب أرقاماً فقط'); el.focus(); return undefined; }
+  return s===''?null:+s;
 }
 
 /* ---------------- التحديات ---------------- */
@@ -1785,7 +1803,7 @@ function renderBank(){
   $('#bkTol').value=String(B.tol||5);
   // الكشوف المحمّلة
   $('#bkStmts').innerHTML=B.stmts.length?`<div class="tbl-wrap"><table class="fin"><thead><tr><th>الكشف</th><th>من</th><th>إلى</th><th class="num">حركات</th><th class="num">رصيد أول</th><th class="num">رصيد آخر</th></tr></thead><tbody>${B.stmts.map(s=>`<tr><td>${esc(s.name)}</td><td>${s.from}</td><td>${s.to}</td><td class="num">${s.n}</td>${s.open!=null?numCell(s.open):'<td class="muted">—</td>'}${s.close!=null?numCell(s.close):'<td class="muted">—</td>'}</tr>`).join('')}</tbody></table></div>
-    <div class="row" style="margin-top:8px">${B.stmts.every(s=>s.close==null)?`<div class="field"><label>رصيد البنك الختامي حسب الكشف</label><input class="inp" type="number" id="bkClose" value="${B.closeBal??''}" style="direction:ltr;width:150px"></div>`:''}<button class="btn sm danger" id="bkClear">حذف كشوف البنك</button></div>`:'';
+    <div class="row" style="margin-top:8px">${B.stmts.every(s=>s.close==null)?`<div class="field"><label>رصيد البنك الختامي حسب الكشف</label><input class="inp" type="text" inputmode="decimal" id="bkClose" value="${B.closeBal??''}" style="direction:ltr;width:150px"></div>`:''}<button class="btn sm danger" id="bkClear">حذف كشوف البنك</button></div>`:'';
   // ملفات بانتظار التأكيد
   $('#bkPending').innerHTML=bankPending.map((p,pi)=>{
     const h=p.rows[p.hdr]||[], ncol=Math.max(h.length,...p.rows.slice(p.hdr,p.hdr+8).map(r=>r.length));
@@ -1805,7 +1823,7 @@ function renderBank(){
     card.querySelectorAll('[data-bact]').forEach(b=>b.onclick=()=>{ if(b.dataset.bact==='drop'){ bankPending.splice(bankPending.indexOf(p),1); renderBank(); return; }
       const r=bankCommit(p,b.dataset.bact==='replace'); if(r.error){ card.querySelector('[data-bmsg]').textContent=r.error; return; }
       bankPending.splice(bankPending.indexOf(p),1); save(); toast(r.msg); renderBank(); }); });
-  if($('#bkClose')) $('#bkClose').onchange=e=>{ B.closeBal=e.target.value===''?null:+e.target.value; save(); renderBank(); };
+  if($('#bkClose')) $('#bkClose').onchange=e=>{ const v=numInput(e.target); if(v===undefined) return; B.closeBal=v; save(); renderBank(); };
   if($('#bkClear')) $('#bkClear').onclick=()=>{ if(!confirm('حذف كشوف البنك والمطابقات اليدوية؟')) return; Object.assign(B,{rows:[],stmts:[],manual:[],block:[],closeBal:null}); save(); renderBank(); };
 
   const R=bankRecon();
