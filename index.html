@@ -934,7 +934,12 @@ function runForecast(){
   // رصيد يدوي (من كشف البنك/الصندوق الفعلي) يتقدّم على الدفاتر والمطابقة
   if(f.openCash!=null && f.openCash!==''){ startCash=+f.openCash; cashSrc='manual'; }
   let cash=startCash; const open=[],close=[],inflow=[],outflow=[];
+  // الرصيد أول الشهر: الشهر الأول من خانة "رصيد النقد في بداية التنبؤ"، وأي شهر بعده ممكن يتعدّل يدوياً (S.fc.ov.open)
+  // فيبدأ منه الحساب للأشهر التالية
+  if(cashSrc==='manual') mark('open',0);
   for(let i=0;i<n;i++){
+    const oo=i>0&&f.ov&&f.ov.open&&f.ov.open[keys[i]];
+    if(oo!=null&&oo!==false&&isFinite(oo)){ cash=+oo; mark('open',i); }
     open.push(cash);
     const inn=coll[i]+oiF[i]+cmIn[i], out=supp[i]+opexTot[i]+finF[i]+autoOut[i]+cmOut[i];
     inflow.push(inn); outflow.push(out); cash+=inn-out; close.push(cash);
@@ -1091,7 +1096,7 @@ function renderFcTable(){
   F.cmRows.filter(r=>r.type!=='in').forEach(r=>rows.push(['',r.name,r.vals,'',r.key,r.custom!=null,r]));
   rows.push(['tot','مجموع المدفوعات',F.outflow]);
   rows.push(['grand','صافي التدفق النقدي',F.inflow.map((v,i)=>v-F.outflow[i])]);
-  rows.push(['','الرصيد أول الشهر',F.open]);
+  rows.push(['','الرصيد أول الشهر',F.open,'','open',1]);
   rows.push(['grand','الرصيد آخر الشهر',F.close]);
   let h=`<thead><tr><th class="sticky">البند</th>${F.keys.map(k=>`<th class="num">${monthLabel(k,true)}</th>`).join('')}<th class="num">المجموع</th></tr></thead><tbody>`;
   rows.forEach(([c,l,v,x,key,ed,cr])=>{
@@ -1118,7 +1123,8 @@ function renderFcTable(){
 // النقر بجدول التنبؤ: تعديل رقم، فتح تفصيل الحسابات، حذف بند مضاف، رجوع للمحسوب
 function bindFcTable(){
   $('#fcTable').addEventListener('click',ev=>{
-    const rs=ev.target.closest('[data-ovreset]'); if(rs){ const k=rs.dataset.ovreset; delete S.fc.ov[k]; if(S.fc.ova) delete S.fc.ova[k]; refreshForecast(true); return; }
+    const rs=ev.target.closest('[data-ovreset]'); if(rs){ const k=rs.dataset.ovreset; delete S.fc.ov[k]; if(S.fc.ova) delete S.fc.ova[k];
+      if(k==='open'){ S.fc.openCash=null; renderForecastInputs(); } refreshForecast(true); return; }
     const cd=ev.target.closest('[data-cdel]'); if(cd){ S.fc.custom.splice(+cd.dataset.cdel,1); refreshForecast(true); return; }
     const dr=ev.target.closest('[data-drill]'); if(dr){ const k=dr.dataset.drill; fcOpen.has(k)?fcOpen.delete(k):fcOpen.add(k); renderFcTable(); return; }
     const td=ev.target.closest('td[data-ed]'); if(td && !td.querySelector('input')){ fcEditCell(td); return; }
@@ -1145,7 +1151,9 @@ function fcEditCell(td){
     if(save && s==null){ toast('الرقم غير صحيح — اكتب أرقاماً فقط'); if(!blur){ inp.focus(); return; } save=false; }
     done=true;
     if(!save || (s!=='' && +s===old && !FC.ovIdx[key]?.has(i))){ renderFcTable(); return; }
-    if(key.startsWith('custom:')){ const c=S.fc.custom[+key.slice(7)]; c.vals=c.vals||{}; if(s==='') delete c.vals[mk]; else c.vals[mk]=+s; }
+    // الرصيد أول الشهر الأول = خانة "رصيد النقد في بداية التنبؤ" نفسها
+    if(key==='open'&&i===0){ S.fc.openCash=s===''?null:+s; renderForecastInputs(); }
+    else if(key.startsWith('custom:')){ const c=S.fc.custom[+key.slice(7)]; c.vals=c.vals||{}; if(s==='') delete c.vals[mk]; else c.vals[mk]=+s; }
     else if(key.startsWith('acct:')){ const [ik,code]=key.slice(5).split('|'), A=S.fc.ova||(S.fc.ova={}), it=A[ik]||(A[ik]={}), o=it[code]||(it[code]={});
       if(s==='') delete o[mk]; else o[mk]=+s;
       if(!Object.keys(o).length) delete it[code]; if(!Object.keys(it).length) delete A[ik]; }
@@ -2109,7 +2117,7 @@ function exportExcel(){
   F.cmRows.filter(x=>x.type!=='in').forEach(x=>fRow(x.name,x.vals));
   const lastOut=tr-1, rOut=fRow('مجموع المدفوعات',F.outflow,(k,c)=>`SUM(${c}${rSupp}:${c}${lastOut})`);
   const rNetF=fRow('صافي التدفق النقدي',F.inflow.map((v,i)=>v-F.outflow[i]),(k,c)=>`${c}${rIn}-${c}${rOut}`);
-  fRow('الرصيد أول الشهر',F.open,(k,c,r)=>k?`${FCc(k-1)}${r+1}`:A_.open,null,false);
+  fRow('الرصيد أول الشهر',F.open,(k,c,r)=>!k?A_.open:(F.ovIdx.open&&F.ovIdx.open.has(k)?null:`${FCc(k-1)}${r+1}`),null,false);
   const rClose=fRow('الرصيد آخر الشهر',F.close,(k,c,r)=>`${c}${r-1}+${c}${rNetF}`,null,false);
   const cR=`${FCc(0)}${rClose}:${FCc(n-1)}${rClose}`; tr++;
   [['أدنى رصيد متوقع',F.minC,`MIN(${cR})`],['الرصيد في نهاية التنبؤ',F.close[n-1],`${FCc(n-1)}${rClose}`],
