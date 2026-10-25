@@ -97,6 +97,14 @@
   table.fin tr.tot td{font-weight:700;border-top:1.5px solid var(--ink-soft)}
   table.fin tr.grand td{font-weight:700;font-family:'IBM Plex Sans Arabic';border-top:2px solid var(--ink);background:var(--surface-2)}
   table.fin td.ind{padding-inline-start:26px}
+  table.fin td.ed{cursor:pointer}
+  table.fin td.ed:hover{outline:1px dashed var(--ink-soft);outline-offset:-3px}
+  table.fin td.ov{background:color-mix(in srgb,var(--s1) 16%,transparent);font-weight:700}
+  table.fin tr.det td{font-size:12px;color:var(--ink-soft);background:var(--surface-2)}
+  table.fin .drill{cursor:pointer;border-bottom:1px dotted var(--ink-soft)}
+  table.fin .drill .tg{display:inline-block;width:16px;height:16px;line-height:14px;text-align:center;border:1px solid var(--border);border-radius:4px;font-size:12px;font-weight:700;background:var(--surface-2)}
+  table.fin .fc-in{width:100px;direction:ltr;padding:3px 6px}
+  .btn.xs{padding:0 6px;font-size:11px;line-height:18px}
   table.fin td.sticky,table.fin th.sticky{position:sticky;right:0;background:var(--surface);z-index:1;min-width:190px}
   table.fin thead th.sticky{background:var(--surface-2);z-index:2}
   table.fin tr.sec td.sticky{background:var(--surface-2)}
@@ -301,7 +309,16 @@
       <div class="tbl-wrap"><table class="fin" id="cmTable"></table></div>
       <button class="btn sm no-print" id="cmAdd" style="margin-top:8px">+ إضافة بند</button>
     </div>
-    <div class="card"><h2>نموذج التدفق النقدي الشهري المتوقع</h2><div class="sub" id="fcTableSub"></div><div class="tbl-wrap"><table class="fin" id="fcTable"></table></div></div>
+    <div class="card"><h2>نموذج التدفق النقدي الشهري المتوقع</h2><div class="sub" id="fcTableSub"></div>
+      <div class="sub no-print">اضغط على أي رقم لبند لتعديله (الخلايا الملوّنة معدّلة يدوياً — امسح الرقم أو اضغط ↺ للرجوع للمحسوب)، واضغط على اسم البند (+) لعرض الحسابات المكوّنة له.</div>
+      <div class="tbl-wrap"><table class="fin" id="fcTable"></table></div>
+      <div class="row no-print" style="margin-top:10px;align-items:flex-end">
+        <div class="field"><label for="fcNewName">بند جديد</label><input class="inp" id="fcNewName" placeholder="مثال: إيجار مستودع جديد"></div>
+        <div class="field"><label for="fcNewType">النوع</label><select class="inp" id="fcNewType"><option value="out">مدفوعات</option><option value="in">مقبوضات</option></select></div>
+        <div class="field"><label for="fcNewAmt">مبلغ شهري (اختياري)</label><input class="inp" id="fcNewAmt" type="number" style="direction:ltr;width:130px"></div>
+        <button class="btn sm primary" id="fcNewAdd">+ إضافة البند للجدول</button>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -410,7 +427,8 @@ let pending = [];      // ملفات بانتظار التأكيد
 function freshState(){
   return {accounts:{}, txns:[], sources:[], settings:{excludeClosing:true, includeUnposted:true, currency:'د.أ'},
     fc:{horizon:12, trend:true, season:true, salesAdj:0, costAdj:0, inflation:3, raise:0, raiseMonth:1, dso:null, dpo:null, purchPct:null, buffer:null, scn:'base',
-        usePos:true, useCheques:true, auto:{loans:true, partners:true, capex:false}},
+        usePos:true, useCheques:true, auto:{loans:true, partners:true, capex:false},
+        custom:[], ov:{}},   // بنود مضافة بجدول التنبؤ + تعديلات يدوية على أرقام البنود
     commitments:[],
     // من مجلد ZadMart-Sync على Google Drive (نفس مصدر لوحة المبيعات)
     pos:null, drive:{sig:{}, at:null, files:{}}, chq:null, glTb:null,
@@ -852,15 +870,18 @@ function runForecast(){
   const B=salesBasis(e), h0=B.h0, startCal=+M.months[h0].slice(5)-1;
   const r=ratiosAt(e);
   const keys=Array.from({length:n},(_,k)=>addMonths(M.months[e],k+1));
-  const sales=project(B.hist,startCal,n,f.trend,f.season).map(v=>v*(1+f.salesAdj/100));
+  // تعديلات يدوية من جدول التنبؤ: S.fc.ov[بند][شهر] تحلّ محل الرقم المحسوب (مفتاحها الشهر فتبقى لو تغيّرت مدة التنبؤ)
+  const ovIdx={};
+  const ovA=(key,arr)=>{ const o=f.ov&&f.ov[key]; if(o) keys.forEach((k,i)=>{ if(o[k]!=null&&isFinite(o[k])){ arr[i]=+o[k]; (ovIdx[key]||(ovIdx[key]=new Set())).add(i); } }); return arr; };
+  const sales=ovA('sales',project(B.hist,startCal,n,f.trend,f.season).map(v=>v*(1+f.salesAdj/100)));
   const autoPurchPct=B.autoPurchPct;
   const purchPct=(f.purchPct!=null?f.purchPct/100:autoPurchPct);
-  const purch=sales.map(v=>v*purchPct*(1+f.costAdj/100));
+  const purch=ovA('purch',sales.map(v=>v*purchPct*(1+f.costAdj/100)));
   const infl=1+f.inflation/100;
   const opexF={};
-  OPEX.forEach(k=>{ const b=Math.max(0,avg(M.ser[k].slice(Math.max(0,e-5),e+1))); opexF[k]=keys.map((_,i)=>b*infl*(k==='salaries'&&i>=f.raiseMonth-1?1+f.raise/100:1)); });
-  const finF=keys.map(()=>Math.max(0,avg(M.ser.fin.slice(Math.max(0,e-5),e+1))));
-  const oiF=keys.map(()=>Math.max(0,avg(M.ser.otherInc.slice(Math.max(0,e-5),e+1))));
+  OPEX.forEach(k=>{ const b=Math.max(0,avg(M.ser[k].slice(Math.max(0,e-5),e+1))); opexF[k]=ovA('opex:'+k,keys.map((_,i)=>b*infl*(k==='salaries'&&i>=f.raiseMonth-1?1+f.raise/100:1))); });
+  const finF=ovA('fin',keys.map(()=>Math.max(0,avg(M.ser.fin.slice(Math.max(0,e-5),e+1)))));
+  const oiF=ovA('oi',keys.map(()=>Math.max(0,avg(M.ser.otherInc.slice(Math.max(0,e-5),e+1)))));
   const dso=f.dso!=null?f.dso:Math.round(clamp(r.dso??0,0,180));
   const dpo=f.dpo!=null?f.dpo:Math.round(clamp(r.dpo??0,0,180));
   // التحصيل والسداد: نطبّق مدة التحصيل/السداد على المبيعات والمشتريات الفعلية لآخر 6 أشهر + المتوقعة معاً،
@@ -875,11 +896,11 @@ function runForecast(){
   const chqIn=Array(n).fill(0), chqOut=Array(n).fill(0);
   if(useChq) for(const c of openCheques()){ const i=c.due?Math.max(0,mDiff(keys[0],c.due.slice(0,7))):0; if(i<n) (c.dir==='out'?chqOut:chqIn)[i]+=c.value; }
   const openRecv=Math.max(0,r.recv), openPay=Math.max(0,r.pay);
-  const coll=coll0.map((v,i)=>Math.max(v,chqIn[i]));
-  const supp=supp0.map((v,i)=>Math.max(v,chqOut[i]));
+  const coll=ovA('coll',coll0.map((v,i)=>Math.max(v,chqIn[i])));
+  const supp=ovA('supp',supp0.map((v,i)=>Math.max(v,chqOut[i])));
   // بنود تلقائية + التزامات
   const auto=autoItemsCalc(e), autoRows=[];
-  for(const k in auto){ if(f.auto[k] && auto[k].amount>0){ let left=auto[k].cap??Infinity; autoRows.push({name:auto[k].label, vals:keys.map(()=>{const v=Math.min(auto[k].amount,Math.max(0,left)); left-=v; return v;})}); } }
+  for(const k in auto){ if(f.auto[k] && auto[k].amount>0){ let left=auto[k].cap??Infinity; autoRows.push({key:'auto:'+k, name:auto[k].label, vals:ovA('auto:'+k,keys.map(()=>{const v=Math.min(auto[k].amount,Math.max(0,left)); left-=v; return v;}))}); } }
   const cmIn=Array(n).fill(0), cmOut=Array(n).fill(0), cmRows=[];
   S.commitments.forEach(c=>{
     const vals=Array(n).fill(0), st=Math.max(1,+c.start||1)-1, amt=+c.amount||0;
@@ -887,6 +908,12 @@ function runForecast(){
     for(let i=st;i<n;i+= step||n){ vals[i]+=amt; }
     vals.forEach((v,i)=>{ if(c.type==='in') cmIn[i]+=v; else cmOut[i]+=v; });
     cmRows.push({name:c.name||'بند',type:c.type,vals});
+  });
+  // بنود يضيفها المستخدم مباشرة بجدول التنبؤ، بمبلغ لكل شهر
+  (f.custom||[]).forEach((c,ci)=>{
+    const vals=keys.map(k=>+(c.vals&&c.vals[k])||0);
+    vals.forEach((v,i)=>{ if(c.type==='in') cmIn[i]+=v; else cmOut[i]+=v; });
+    cmRows.push({name:c.name||'بند',type:c.type,vals,custom:ci,key:'custom:'+ci});
   });
   const autoOut=keys.map((_,i)=>sum(autoRows.map(x=>x.vals[i])));
   const opexTot=keys.map((_,i)=>sum(OPEX.map(k=>opexF[k][i])));
@@ -910,7 +937,7 @@ function runForecast(){
   const firstBelow=close.findIndex(v=>v<buffer), firstNeg=close.findIndex(v=>v<0);
   FC={keys,sales,purch,purchPct,autoPurchPct,opexF,opexTot,finF,oiF,coll,supp,autoRows,cmRows,cmIn,cmOut,autoOut,open,close,inflow,outflow,
       dso,dpo,buffer,fixedMonthly,minC,minI,firstBelow,firstNeg,openCash:startCash,bookCash:r.cash,bankAdj,bankE:BR?.E,cashSrc,openRecv,openPay,r,
-      need:Math.max(0,buffer-minC),useChq,chqIn,chqOut,basis:B};
+      need:Math.max(0,buffer-minC),useChq,chqIn,chqOut,basis:B,ovIdx,H,hs};
   return FC;
 }
 
@@ -1010,36 +1037,103 @@ function refreshForecast(skipCm){
   mkChart('chFcFlow',{type:'bar',data:{labels:F.keys.map(k=>monthLabel(k,true)),datasets:[
     {label:'المقبوضات',data:F.inflow,backgroundColor:cssv('--s1'),borderRadius:4,maxBarThickness:16,borderColor:cssv('--surface'),borderWidth:{left:1,right:1}},
     {label:'المدفوعات',data:F.outflow,backgroundColor:cssv('--s2'),borderRadius:4,maxBarThickness:16,borderColor:cssv('--surface'),borderWidth:{left:1,right:1}}]},options:bo});
-  // الجدول
+  renderFcTable();
+  renderChallenges();
+}
+
+// حسابات شجرة الحسابات خلف كل بند بالتنبؤ: البند يتوزّع عليها حسب حصة كل حساب من أساسه
+// (متوسط حركته الشهرية لآخر win أشهر — نفس فترة الأساس التي حُسب منها البند)
+const FC_DRILL={
+  sales:{cats:['revenue','sales_returns'],neg:1,win:6,t:'حسابات المبيعات'}, coll:{same:'sales'},
+  purch:{cats:()=>M.periodic?['purchases']:['cogs','inventory'],win:6,t:'حسابات المشتريات'}, supp:{same:'purch'},
+  fin:{cats:['finance_cost'],win:6,t:'حسابات المصاريف البنكية'}, oi:{cats:['other_income'],neg:1,win:6,t:'حسابات الإيرادات الأخرى'},
+  'auto:loans':{cats:['st_loans','lt_loans'],pos:1,win:12,t:'حسابات القروض'}, 'auto:partners':{cats:['partners'],pos:1,win:12,t:'حسابات الشركاء'},
+  'auto:capex':{cats:['fixed_assets'],pos:1,win:12,t:'حسابات الأصول الثابتة'},
+};
+OPEX.forEach(k=>FC_DRILL['opex:'+k]={cats:[k],win:6,t:'حسابات '+CAT[k].label});
+function fcDrill(key){
+  let d=FC_DRILL[key]; if(!d) return null; if(d.same) d=FC_DRILL[d.same];
+  const cats=typeof d.cats==='function'?d.cats():d.cats, e=P.to, a=Math.max(0,e-d.win+1);
+  const rows=Object.keys(M.mov).filter(c=>cats.includes(S.accounts[c]?.cat)).map(c=>{
+    let s=0; for(let i=a;i<=e;i++){ const v=M.mov[c][i]*(d.neg?-1:1); s+=d.pos?Math.max(0,v):v; }
+    return {code:c,name:S.accounts[c].name,basis:s/(e-a+1)}; }).filter(x=>Math.abs(x.basis)>=0.005).sort((x,y)=>Math.abs(y.basis)-Math.abs(x.basis));
+  const tot=sum(rows.map(x=>x.basis)); rows.forEach(x=>x.share=tot?x.basis/tot:0);
+  return {title:d.t,months:e-a+1,rows,tot};
+}
+
+const fcOpen=new Set();   // البنود المفتوح تفصيلها بالجدول
+function renderFcTable(){
+  const F=FC, n=F.keys.length;
   $('#fcTableSub').textContent=`السيناريو: ${({base:'أساسي',pess:'متحفّظ',opt:'متفائل',custom:'مخصص'})[S.fc.scn]} — المشتريات ${pct(F.purchPct,1)} من المبيعات، تحصيل ${F.dso} يوم، سداد ${F.dpo} يوم`;
+  // [الصنف، الاسم، القيم، تنسيق، مفتاح البند، قابل للتعديل، بند مضاف]
   const rows=[];
   rows.push(['sec','المقبوضات']);
-  rows.push(['','المبيعات المتوقعة (للعلم)',F.sales,'muted']);
-  rows.push(['','التحصيلات من العملاء',F.coll]);
+  rows.push(['','المبيعات المتوقعة (للعلم)',F.sales,'muted','sales',1]);
+  rows.push(['','التحصيلات من العملاء',F.coll,'','coll',1]);
   if(F.useChq) rows.push(['','منها شيكات واردة مستحقة',F.chqIn,'muted']);
-  rows.push(['','إيرادات أخرى',F.oiF]);
-  if(sum(F.cmIn)) rows.push(['','مقبوضات أخرى / تمويل',F.cmIn]);
+  rows.push(['','إيرادات أخرى',F.oiF,'','oi',1]);
+  F.cmRows.filter(r=>r.type==='in').forEach(r=>rows.push(['',r.name,r.vals,'',r.key,r.custom!=null,r]));
   rows.push(['tot','مجموع المقبوضات',F.inflow]);
   rows.push(['sec','المدفوعات']);
-  rows.push(['','المشتريات المتوقعة (للعلم)',F.purch,'muted']);
-  rows.push(['','دفعات الموردين والشيكات',F.supp]);
+  rows.push(['','المشتريات المتوقعة (للعلم)',F.purch,'muted','purch',1]);
+  rows.push(['','دفعات الموردين والشيكات',F.supp,'','supp',1]);
   if(F.useChq) rows.push(['','منها شيكات صادرة مستحقة',F.chqOut,'muted']);
-  OPEX.forEach(k=>rows.push(['',CAT[k].label,F.opexF[k]]));
-  rows.push(['','مصاريف وفوائد بنكية',F.finF]);
-  F.autoRows.forEach(r=>rows.push(['',r.name,r.vals]));
-  F.cmRows.filter(r=>r.type!=='in').forEach(r=>rows.push(['',r.name,r.vals]));
+  OPEX.forEach(k=>rows.push(['',CAT[k].label,F.opexF[k],'','opex:'+k,1]));
+  rows.push(['','مصاريف وفوائد بنكية',F.finF,'','fin',1]);
+  F.autoRows.forEach(r=>rows.push(['',r.name,r.vals,'',r.key,1]));
+  F.cmRows.filter(r=>r.type!=='in').forEach(r=>rows.push(['',r.name,r.vals,'',r.key,r.custom!=null,r]));
   rows.push(['tot','مجموع المدفوعات',F.outflow]);
   rows.push(['grand','صافي التدفق النقدي',F.inflow.map((v,i)=>v-F.outflow[i])]);
   rows.push(['','الرصيد أول الشهر',F.open]);
   rows.push(['grand','الرصيد آخر الشهر',F.close]);
   let h=`<thead><tr><th class="sticky">البند</th>${F.keys.map(k=>`<th class="num">${monthLabel(k,true)}</th>`).join('')}<th class="num">المجموع</th></tr></thead><tbody>`;
-  rows.forEach(([c,l,v,x])=>{
+  rows.forEach(([c,l,v,x,key,ed,cr])=>{
     if(c==='sec'){ h+=`<tr class="sec"><td class="sticky">${l}</td><td colspan="${n+1}"></td></tr>`; return; }
-    const noTot=l.startsWith('الرصيد');
-    h+=`<tr class="${c}"><td class="sticky ${x||''}">${esc(l)}</td>${v.map(n_=>`<td class="num ${x||''} ${n_<-0.5?'neg':''} ${l==='الرصيد آخر الشهر'&&n_<F.buffer&&n_>=0?'neg':''}">${fmt(n_)}</td>`).join('')}${noTot?'<td></td>':numCell(sum(v))}</tr>`;
+    const noTot=l.startsWith('الرصيد'), ovs=key&&F.ovIdx[key], dr=key&&!cr?fcDrill(key):null, open=dr&&fcOpen.has(key);
+    const lbl=`${dr?`<span class="drill" data-drill="${esc(key)}" title="عرض الحسابات المكوّنة لهذا البند"><span class="tg">${open?'−':'+'}</span> ${esc(l)}</span>`:esc(l)}`
+      +(ovs&&ovs.size?` <button class="btn xs no-print" data-ovreset="${esc(key)}" title="رجوع للأرقام المحسوبة">↺</button>`:'')
+      +(cr&&cr.custom!=null?` <span class="chip">مضاف</span> <button class="btn xs danger no-print" data-cdel="${cr.custom}" title="حذف البند">✕</button>`:'');
+    h+=`<tr class="${c}"><td class="sticky ${x||''}">${lbl}</td>${v.map((n_,i)=>{ const ov=ovs&&ovs.has(i);
+      return `<td class="num ${x||''} ${n_<-0.5?'neg':''} ${l==='الرصيد آخر الشهر'&&n_<F.buffer&&n_>=0?'neg':''} ${ed?'ed':''} ${ov?'ov':''}"${ed?` data-ed="${esc(key)}" data-i="${i}" data-v="${n_}" title="${ov?'معدّل يدوياً — امسح الرقم للرجوع للمحسوب':'اضغط لتعديل الرقم'}"`:''}>${fmt(n_)}</td>`; }).join('')}${noTot?'<td></td>':numCell(sum(v))}</tr>`;
+    if(open){
+      h+=`<tr class="det"><td class="sticky ind">${dr.title} — متوسط آخر ${dr.months} أشهر: ${fmt(dr.tot)} شهرياً</td><td colspan="${n+1}"></td></tr>`;
+      if(!dr.rows.length) h+=`<tr class="det"><td class="sticky ind">لا توجد حركات على هذه الحسابات بفترة الأساس</td><td colspan="${n+1}"></td></tr>`;
+      dr.rows.forEach(a=>{ const av=v.map(n_=>n_*a.share);
+        h+=`<tr class="det"><td class="sticky ind">${esc(a.code)} — ${esc(a.name)} <span class="muted">(${pct(a.share)})</span></td>${av.map(n_=>`<td class="num">${fmt(n_)}</td>`).join('')}${numCell(sum(av))}</tr>`; });
+    }
   });
   $('#fcTable').innerHTML=h+'</tbody>';
-  renderChallenges();
+}
+// النقر بجدول التنبؤ: تعديل رقم، فتح تفصيل الحسابات، حذف بند مضاف، رجوع للمحسوب
+function bindFcTable(){
+  $('#fcTable').addEventListener('click',ev=>{
+    const rs=ev.target.closest('[data-ovreset]'); if(rs){ delete S.fc.ov[rs.dataset.ovreset]; refreshForecast(true); return; }
+    const cd=ev.target.closest('[data-cdel]'); if(cd){ S.fc.custom.splice(+cd.dataset.cdel,1); refreshForecast(true); return; }
+    const dr=ev.target.closest('[data-drill]'); if(dr){ const k=dr.dataset.drill; fcOpen.has(k)?fcOpen.delete(k):fcOpen.add(k); renderFcTable(); return; }
+    const td=ev.target.closest('td[data-ed]'); if(td && !td.querySelector('input')) fcEditCell(td);
+  });
+  $('#fcNewAdd').onclick=()=>{
+    const name=$('#fcNewName').value.trim(); if(!name){ toast('اكتب اسم البند'); $('#fcNewName').focus(); return; }
+    const amt=$('#fcNewAmt').value.trim(), vals={};
+    if(amt!=='') FC.keys.forEach(k=>vals[k]=+amt);
+    (S.fc.custom||(S.fc.custom=[])).push({name,type:$('#fcNewType').value,vals});
+    $('#fcNewName').value=''; $('#fcNewAmt').value='';
+    refreshForecast(true); toast('تمت إضافة البند — اضغط على أي شهر لتعديل مبلغه');
+  };
+}
+function fcEditCell(td){
+  const key=td.dataset.ed, i=+td.dataset.i, mk=FC.keys[i], old=Math.round(+td.dataset.v*100)/100;
+  td.innerHTML=`<input class="inp fc-in" type="number" step="any" value="${old}">`;
+  const inp=td.querySelector('input'); inp.focus(); inp.select();
+  let done=false;
+  const commit=save=>{ if(done) return; done=true;
+    const s=inp.value.trim();
+    if(!save || (s!=='' && +s===old && !FC.ovIdx[key]?.has(i))){ renderFcTable(); return; }
+    if(key.startsWith('custom:')){ const c=S.fc.custom[+key.slice(7)]; c.vals=c.vals||{}; if(s==='') delete c.vals[mk]; else c.vals[mk]=+s; }
+    else { const o=S.fc.ov[key]||(S.fc.ov[key]={}); if(s==='') delete o[mk]; else o[mk]=+s; if(!Object.keys(o).length) delete S.fc.ov[key]; }
+    refreshForecast(true); };
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); commit(true); } else if(e.key==='Escape') commit(false); });
+  inp.addEventListener('blur',()=>commit(true));
 }
 
 /* ---------------- التحديات ---------------- */
@@ -1953,12 +2047,13 @@ function exportExcel(){
    ['infl','تضخم المصاريف التشغيلية',fc.inflation/100,PCT],['raise','زيادة الرواتب',fc.raise/100,PCT],['raiseM','زيادة الرواتب تبدأ من شهر التنبؤ رقم',fc.raiseMonth,'0'],
    ['dso','أيام تحصيل العملاء',F.dso,'0'],['dpo','أيام السداد للموردين',F.dpo,'0'],['open','رصيد النقد في بداية التنبؤ',F.openCash,NUM],['buffer','الحد الأدنى الآمن للنقد',F.buffer,NUM]]
     .forEach(([k,l,v,z],j)=>{ fS.set(0,j+2,l); fS.set(1,j+2,v,null,z); A_[k]=`$B$${j+2}`; });
-  fS.set(0,12,'غيّر الخلايا B2:B11 وكل الجدول بيتحدّث. "المبيعات قبل التعديل" محسوبة بالتطبيق (اتجاه النمو والموسمية) وهي أرقام ثابتة.');
+  fS.set(0,12,'غيّر الخلايا B2:B11 وكل الجدول بيتحدّث. "المبيعات قبل التعديل" محسوبة بالتطبيق (اتجاه النمو والموسمية)، والأرقام المعدّلة يدوياً بالتطبيق والبنود المضافة أرقام ثابتة.');
   const FCc=k=>col(1+H+k), HR=14, NR=15; let tr=16;
   fS.set(0,HR,'البند'); for(let j=0;j<H;j++) fS.set(1+j,HR,monthLabel(M.months[hs+j],true)+' (فعلي)');
   F.keys.forEach((k,i)=>{ fS.set(1+H+i,HR,monthLabel(k,true)); fS.set(1+H+i,NR,i+1); }); fS.set(1+H+n,HR,'مجموع التنبؤ'); fS.set(0,NR,'رقم شهر التنبؤ');
-  const fRow=(l,fut,futF,past,total=true)=>{ const r=tr++; fS.set(0,r,l); (past||[]).forEach((v,j)=>fS.set(1+j,r,v,null,NUM));
-    for(let k=0;k<n;k++) fS.set(1+H+k,r,fut[k],futF?futF(k,FCc(k),r):null,NUM);
+  // key = مفتاح البند بالتطبيق: الخلية المعدّلة يدوياً تنكتب رقماً ثابتاً بدل المعادلة
+  const fRow=(l,fut,futF,past,total=true,key)=>{ const r=tr++; fS.set(0,r,l); (past||[]).forEach((v,j)=>fS.set(1+j,r,v,null,NUM));
+    for(let k=0;k<n;k++) fS.set(1+H+k,r,fut[k],futF&&!(key&&F.ovIdx[key]&&F.ovIdx[key].has(k))?futF(k,FCc(k),r):null,NUM);
     if(total) fS.set(1+H+n,r,sum(fut),`SUM(${FCc(0)}${r}:${FCc(n-1)}${r})`,NUM); return r; };
   const fSec=l=>fS.set(0,tr++,l);
   // التحصيل/السداد بعد مدة (أيام/30) شهراً موزّعة على شهرين متتاليين — نفس lagged() على صف (فعلي + متوقع)
@@ -1967,18 +2062,18 @@ function exportExcel(){
   const avgF=(k,neg)=>`MAX(0,${neg?'-':''}AVERAGE(${DQ}${MC(Math.max(0,b-5))}${ROW[k]}:${MC(b)}${ROW[k]}))`;
   fSec('الأساس');
   const rBase=fRow('المبيعات قبل التعديل (اتجاه وموسمية)',baseSales);
-  const rSales=fRow('المبيعات (فعلي ثم متوقع)',F.sales,(k,c)=>`${c}${rBase}*(1+${A_.salesAdj})`,pastSales);
-  const rPurch=fRow('المشتريات (فعلي ثم متوقع)',F.purch,(k,c)=>`${c}${rSales}*${A_.purchPct}*(1+${A_.costAdj})`,pastPurch);
+  const rSales=fRow('المبيعات (فعلي ثم متوقع)',F.sales,(k,c)=>`${c}${rBase}*(1+${A_.salesAdj})`,pastSales,true,'sales');
+  const rPurch=fRow('المشتريات (فعلي ثم متوقع)',F.purch,(k,c)=>`${c}${rSales}*${A_.purchPct}*(1+${A_.costAdj})`,pastPurch,true,'purch');
   const rChqIn=F.useChq?fRow('شيكات واردة مستحقة',F.chqIn):null, rChqOut=F.useChq?fRow('شيكات صادرة مستحقة',F.chqOut):null;
   fSec('المقبوضات');
-  const rColl=fRow('التحصيلات من العملاء',F.coll,(k,c)=>F.useChq?`MAX(${lagF(rSales,A_.dso,k)},${c}${rChqIn})`:lagF(rSales,A_.dso,k));
-  fRow('إيرادات أخرى',F.oiF,()=>avgF('other_income',true));
-  if(sum(F.cmIn)) fRow('مقبوضات أخرى / تمويل',F.cmIn);
+  const rColl=fRow('التحصيلات من العملاء',F.coll,(k,c)=>F.useChq?`MAX(${lagF(rSales,A_.dso,k)},${c}${rChqIn})`:lagF(rSales,A_.dso,k),null,true,'coll');
+  fRow('إيرادات أخرى',F.oiF,()=>avgF('other_income',true),null,true,'oi');
+  F.cmRows.filter(x=>x.type==='in').forEach(x=>fRow(x.name,x.vals));
   const lastIn=tr-1, rIn=fRow('مجموع المقبوضات',F.inflow,(k,c)=>`SUM(${c}${rColl}:${c}${lastIn})`);
   fSec('المدفوعات');
-  const rSupp=fRow('دفعات الموردين والشيكات',F.supp,(k,c)=>F.useChq?`MAX(${lagF(rPurch,A_.dpo,k)},${c}${rChqOut})`:lagF(rPurch,A_.dpo,k));
-  OPEX.forEach(k=>fRow(CAT[k].label,F.opexF[k],(i,c)=>`${avgF(k)}*(1+${A_.infl})`+(k==='salaries'?`*IF(${c}$${NR}>=${A_.raiseM},1+${A_.raise},1)`:'')));
-  fRow('مصاريف وفوائد بنكية',F.finF,()=>avgF('finance_cost'));
+  const rSupp=fRow('دفعات الموردين والشيكات',F.supp,(k,c)=>F.useChq?`MAX(${lagF(rPurch,A_.dpo,k)},${c}${rChqOut})`:lagF(rPurch,A_.dpo,k),null,true,'supp');
+  OPEX.forEach(k=>fRow(CAT[k].label,F.opexF[k],(i,c)=>`${avgF(k)}*(1+${A_.infl})`+(k==='salaries'?`*IF(${c}$${NR}>=${A_.raiseM},1+${A_.raise},1)`:''),null,true,'opex:'+k));
+  fRow('مصاريف وفوائد بنكية',F.finF,()=>avgF('finance_cost'),null,true,'fin');
   F.autoRows.forEach(x=>fRow(x.name,x.vals));
   F.cmRows.filter(x=>x.type!=='in').forEach(x=>fRow(x.name,x.vals));
   const lastOut=tr-1, rOut=fRow('مجموع المدفوعات',F.outflow,(k,c)=>`SUM(${c}${rSupp}:${c}${lastOut})`);
@@ -2091,6 +2186,7 @@ $('#posCogs').onchange=e=>{ S.settings.posCogs=e.target.checked; recompute(false
 $('#bulkApply').onclick=()=>{ const p=normCode($('#bulkPrefix').value), c=$('#bulkCat').value; if(!p) return; let n=0; for(const code in S.accounts) if(code.startsWith(p)){ S.accounts[code].cat=c; S.accounts[code].auto=false; n++; } toast(`تم تحديث ${n} حساب`); recompute(false); };
 $('#scnBtns').addEventListener('click',e=>{ const b=e.target.closest('[data-scn]'); if(b) applyScenario(b.dataset.scn); });
 $('#cmAdd').onclick=()=>{ S.commitments.push({name:'',type:'out',amount:0,start:1,repeat:'once'}); refreshForecast(); };
+bindFcTable();
 $('#btnExport').onclick=()=>{ const prev=activeTab; ['statements','analysis','forecast','challenges','bank'].forEach(showTab); exportExcel(); showTab(prev); };
 $('#btnTheme').onclick=()=>{ const r=document.documentElement; const dark=r.dataset.theme? r.dataset.theme==='dark' : matchMedia('(prefers-color-scheme: dark)').matches; r.dataset.theme=dark?'light':'dark'; try{localStorage.setItem('zad_fin_theme',r.dataset.theme);}catch(e){} renderAll(); };
 try{ const th=localStorage.getItem('zad_fin_theme'); if(th) document.documentElement.dataset.theme=th; }catch(e){}
