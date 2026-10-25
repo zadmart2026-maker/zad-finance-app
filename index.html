@@ -310,7 +310,7 @@
       <button class="btn sm no-print" id="cmAdd" style="margin-top:8px">+ إضافة بند</button>
     </div>
     <div class="card"><h2>نموذج التدفق النقدي الشهري المتوقع</h2><div class="sub" id="fcTableSub"></div>
-      <div class="sub no-print">اضغط على أي رقم لبند لتعديله (الخلايا الملوّنة معدّلة يدوياً — امسح الرقم أو اضغط ↺ للرجوع للمحسوب)، واضغط على اسم البند (+) لعرض الحسابات المكوّنة له.</div>
+      <div class="sub no-print">اضغط على أي رقم لبند لتعديله (الخلايا الملوّنة معدّلة يدوياً — امسح الرقم أو اضغط ↺ للرجوع للمحسوب)، واضغط على اسم البند (+) لعرض الحسابات المكوّنة له وتعديل رقم أي حساب. كل التعديلات هنا للتنبؤ فقط ولا تغيّر الحسابات ولا القوائم المالية.</div>
       <div class="tbl-wrap"><table class="fin" id="fcTable"></table></div>
       <div class="row no-print" style="margin-top:10px;align-items:flex-end">
         <div class="field"><label for="fcNewName">بند جديد</label><input class="inp" id="fcNewName" placeholder="مثال: إيجار مستودع جديد"></div>
@@ -428,7 +428,7 @@ function freshState(){
   return {accounts:{}, txns:[], sources:[], settings:{excludeClosing:true, includeUnposted:true, currency:'د.أ'},
     fc:{horizon:12, trend:true, season:true, salesAdj:0, costAdj:0, inflation:3, raise:0, raiseMonth:1, dso:null, dpo:null, purchPct:null, buffer:null, scn:'base',
         usePos:true, useCheques:true, auto:{loans:true, partners:true, capex:false},
-        custom:[], ov:{}},   // بنود مضافة بجدول التنبؤ + تعديلات يدوية على أرقام البنود
+        custom:[], ov:{}, ova:{}},   // بنود مضافة بجدول التنبؤ + تعديلات يدوية على أرقام البنود وحساباتها
     commitments:[],
     // من مجلد ZadMart-Sync على Google Drive (نفس مصدر لوحة المبيعات)
     pos:null, drive:{sig:{}, at:null, files:{}}, chq:null, glTb:null,
@@ -871,8 +871,14 @@ function runForecast(){
   const r=ratiosAt(e);
   const keys=Array.from({length:n},(_,k)=>addMonths(M.months[e],k+1));
   // تعديلات يدوية من جدول التنبؤ: S.fc.ov[بند][شهر] تحلّ محل الرقم المحسوب (مفتاحها الشهر فتبقى لو تغيّرت مدة التنبؤ)
-  const ovIdx={};
-  const ovA=(key,arr)=>{ const o=f.ov&&f.ov[key]; if(o) keys.forEach((k,i)=>{ if(o[k]!=null&&isFinite(o[k])){ arr[i]=+o[k]; (ovIdx[key]||(ovIdx[key]=new Set())).add(i); } }); return arr; };
+  // وتعديلات على مستوى الحساب داخل البند: S.fc.ova[بند][حساب][شهر]؛ البند = مجموع حساباته (المعدّل بقيمته والباقي بحصته)
+  // كلها للتنبؤ فقط — لا تلمس الحركات ولا القوائم المالية
+  const ovIdx={}, ovBase={}, mark=(k,i)=>(ovIdx[k]||(ovIdx[k]=new Set())).add(i);
+  const ovA=(key,arr)=>{ const o=f.ov&&f.ov[key]; if(o) keys.forEach((k,i)=>{ if(o[k]!=null&&isFinite(o[k])){ arr[i]=+o[k]; mark(key,i); } });
+    const oa=f.ova&&f.ova[key];
+    if(oa){ const d=fcDrill(key), share=Object.fromEntries((d?d.rows:[]).map(x=>[x.code,x.share])), base=ovBase[key]=arr.slice();
+      keys.forEach((k,i)=>{ for(const c in oa){ const v=oa[c]&&oa[c][k]; if(v!=null&&isFinite(v)){ arr[i]+= +v-base[i]*(share[c]||0); mark(key,i); mark('acct:'+key+'|'+c,i); } } }); }
+    return arr; };
   const sales=ovA('sales',project(B.hist,startCal,n,f.trend,f.season).map(v=>v*(1+f.salesAdj/100)));
   const autoPurchPct=B.autoPurchPct;
   const purchPct=(f.purchPct!=null?f.purchPct/100:autoPurchPct);
@@ -937,7 +943,7 @@ function runForecast(){
   const firstBelow=close.findIndex(v=>v<buffer), firstNeg=close.findIndex(v=>v<0);
   FC={keys,sales,purch,purchPct,autoPurchPct,opexF,opexTot,finF,oiF,coll,supp,autoRows,cmRows,cmIn,cmOut,autoOut,open,close,inflow,outflow,
       dso,dpo,buffer,fixedMonthly,minC,minI,firstBelow,firstNeg,openCash:startCash,bookCash:r.cash,bankAdj,bankE:BR?.E,cashSrc,openRecv,openPay,r,
-      need:Math.max(0,buffer-minC),useChq,chqIn,chqOut,basis:B,ovIdx,H,hs};
+      need:Math.max(0,buffer-minC),useChq,chqIn,chqOut,basis:B,ovIdx,ovBase,H,hs};
   return FC;
 }
 
@@ -1099,8 +1105,12 @@ function renderFcTable(){
     if(open){
       h+=`<tr class="det"><td class="sticky ind">${dr.title} — متوسط آخر ${dr.months} أشهر: ${fmt(dr.tot)} شهرياً</td><td colspan="${n+1}"></td></tr>`;
       if(!dr.rows.length) h+=`<tr class="det"><td class="sticky ind">لا توجد حركات على هذه الحسابات بفترة الأساس</td><td colspan="${n+1}"></td></tr>`;
-      dr.rows.forEach(a=>{ const av=v.map(n_=>n_*a.share);
-        h+=`<tr class="det"><td class="sticky ind">${esc(a.code)} — ${esc(a.name)} <span class="muted">(${pct(a.share)})</span></td>${av.map(n_=>`<td class="num">${fmt(n_)}</td>`).join('')}${numCell(sum(av))}</tr>`; });
+      // قيمة الحساب = تعديله اليدوي إن وُجد، وإلا حصته من البند قبل تعديلات الحسابات
+      const base=F.ovBase[key]||v, oa=(S.fc.ova&&S.fc.ova[key])||{};
+      dr.rows.forEach(a=>{ const ak='acct:'+key+'|'+a.code, aov=F.ovIdx[ak];
+        const av=F.keys.map((mk,i)=>aov&&aov.has(i)?+oa[a.code][mk]:base[i]*a.share);
+        h+=`<tr class="det"><td class="sticky ind">${esc(a.code)} — ${esc(a.name)} <span class="muted">(${pct(a.share)})</span></td>${av.map((n_,i)=>{ const ov=aov&&aov.has(i);
+          return `<td class="num ed ${ov?'ov':''}" data-ed="${esc(ak)}" data-i="${i}" data-v="${n_}" title="${ov?'معدّل يدوياً للتنبؤ فقط — امسح الرقم للرجوع للمحسوب':'اضغط لتعديل رقم هذا الحساب بالتنبؤ فقط'}">${fmt(n_)}</td>`; }).join('')}${numCell(sum(av))}</tr>`; });
     }
   });
   $('#fcTable').innerHTML=h+'</tbody>';
@@ -1108,11 +1118,11 @@ function renderFcTable(){
 // النقر بجدول التنبؤ: تعديل رقم، فتح تفصيل الحسابات، حذف بند مضاف، رجوع للمحسوب
 function bindFcTable(){
   $('#fcTable').addEventListener('click',ev=>{
-    const rs=ev.target.closest('[data-ovreset]'); if(rs){ delete S.fc.ov[rs.dataset.ovreset]; refreshForecast(true); return; }
+    const rs=ev.target.closest('[data-ovreset]'); if(rs){ const k=rs.dataset.ovreset; delete S.fc.ov[k]; if(S.fc.ova) delete S.fc.ova[k]; refreshForecast(true); return; }
     const cd=ev.target.closest('[data-cdel]'); if(cd){ S.fc.custom.splice(+cd.dataset.cdel,1); refreshForecast(true); return; }
     const dr=ev.target.closest('[data-drill]'); if(dr){ const k=dr.dataset.drill; fcOpen.has(k)?fcOpen.delete(k):fcOpen.add(k); renderFcTable(); return; }
     const td=ev.target.closest('td[data-ed]'); if(td && !td.querySelector('input')){ fcEditCell(td); return; }
-    const nc=ev.target.closest('tbody td.num'); if(nc) toast(nc.closest('tr.det')?'تفاصيل الحسابات للعرض — عدّل رقم البند نفسه':'هذا الرقم مجموع أو رصيد محسوب — عدّل البنود التي فوقه');
+    const nc=ev.target.closest('tbody td.num'); if(nc) toast('هذا الرقم مجموع أو رصيد محسوب — عدّل البنود التي فوقه');
   });
   $('#fcNewAdd').onclick=()=>{
     const name=$('#fcNewName').value.trim(); if(!name){ toast('اكتب اسم البند'); $('#fcNewName').focus(); return; }
@@ -1136,6 +1146,9 @@ function fcEditCell(td){
     done=true;
     if(!save || (s!=='' && +s===old && !FC.ovIdx[key]?.has(i))){ renderFcTable(); return; }
     if(key.startsWith('custom:')){ const c=S.fc.custom[+key.slice(7)]; c.vals=c.vals||{}; if(s==='') delete c.vals[mk]; else c.vals[mk]=+s; }
+    else if(key.startsWith('acct:')){ const [ik,code]=key.slice(5).split('|'), A=S.fc.ova||(S.fc.ova={}), it=A[ik]||(A[ik]={}), o=it[code]||(it[code]={});
+      if(s==='') delete o[mk]; else o[mk]=+s;
+      if(!Object.keys(o).length) delete it[code]; if(!Object.keys(it).length) delete A[ik]; }
     else { const o=S.fc.ov[key]||(S.fc.ov[key]={}); if(s==='') delete o[mk]; else o[mk]=+s; if(!Object.keys(o).length) delete S.fc.ov[key]; }
     refreshForecast(true); };
   inp.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); commit(true); } else if(e.key==='Escape') commit(false); });
