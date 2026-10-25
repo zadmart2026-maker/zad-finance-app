@@ -148,11 +148,23 @@
   .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:10px;font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:99}
   .toast.show{opacity:1}
 
+  /* الطباعة: الشاشة المفتوحة بس (مش كل التبويبات)، بالعرض وبالجداول كاملة بدون تمرير */
+  @page{size:A4 landscape;margin:10mm}
   @media print{
     header.top,nav.tabs,.no-print,.top-actions{display:none!important}
-    section.tab{display:block!important;page-break-after:always}
+    section.tab{display:none!important}
+    section.tab.active{display:block!important}
     body{background:#fff}
-    .card{border:none}
+    .card{border:none;break-inside:auto}
+    .tbl-wrap{overflow:visible!important;max-height:none!important}
+    table.fin{font-size:9.5px}
+    table.fin th,table.fin td{padding:3px 4px}
+    table.fin td.sticky,table.fin th.sticky{position:static;min-width:140px}
+    table.fin td.num{white-space:nowrap}
+    table.fin .drill{border:0} table.fin .drill .tg{display:none}
+    table.fin thead th{position:static}
+    table.fin tr{break-inside:avoid}
+    .chart-box{break-inside:avoid}
   }
 </style>
 <link rel="manifest" href="manifest.json">
