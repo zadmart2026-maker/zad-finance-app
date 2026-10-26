@@ -271,6 +271,18 @@
       <div class="card"><h2>قائمة الدخل</h2><div class="sub" id="isSub"></div><div class="tbl-wrap"><table class="fin" id="isTable"></table></div></div>
       <div class="card"><h2>قائمة المركز المالي</h2><div class="sub" id="bsSub"></div><div class="tbl-wrap"><table class="fin" id="bsTable"></table></div></div>
     </div>
+    <div class="card"><h2>كيف انحسبت تكلفة المبيعات</h2><div class="sub" id="cogsSub"></div>
+      <div class="grid g2" style="align-items:start">
+        <div class="tbl-wrap"><table class="fin" id="cogsTable"></table></div>
+        <div class="no-print">
+          <div class="field"><label for="invCountVal" id="invCountLbl">بضاعة آخر المدة (جرد فعلي)</label>
+            <div class="row" style="gap:6px"><input class="inp" id="invCountVal" type="text" inputmode="decimal" placeholder="قيمة الجرد بالكلفة" style="direction:ltr;width:170px">
+              <button class="btn sm primary" id="invCountSave">حفظ الجرد</button><button class="btn sm" id="invCountClear">حذف الجرد</button></div></div>
+          <div class="sub" style="margin-top:6px">اكتب قيمة البضاعة الموجودة فعلياً بالمخزن (بسعر الكلفة) بنهاية آخر شهر بالفترة المختارة. الفرق عن رصيد المخزون بالدفاتر بيتسجّل تسوية جرد على تكلفة المبيعات بهاد الشهر، وبيظهر بقائمة الدخل والمركز المالي والتدفقات. الحركات المستوردة من Solid Soft ما بتتغيّر.</div>
+          <div id="invCountList"></div>
+        </div>
+      </div>
+    </div>
     <div class="card"><h2>قائمة التدفقات النقدية (الطريقة غير المباشرة)</h2><div class="sub" id="cfSub"></div><div class="tbl-wrap"><table class="fin" id="cfTable"></table></div></div>
   </div>
 </section>
@@ -612,10 +624,17 @@ function buildModel(){
     months.forEach((_,i)=>{ if(!cov[i]) return; const a=pur[i]-tgt[i]-(tsum?invGap*tgt[i]/tsum:0);
       posAdj[i]=a; catMov.cogs[i]-=a; catMov.inventory[i]+=a; });
   }
+  // جرد فعلي يدخله المستخدم (بضاعة آخر المدة كما في نهاية شهر): الفرق عن رصيد المخزون بالدفاتر يُقيَّد بنفس الشهر
+  // على تكلفة المبيعات (قيد تسوية الجرد)، فتصير تكلفة المبيعات = بضاعة أول المدة + المشتريات − بضاعة آخر المدة.
+  // الجرود تُعالج بالترتيب فكل جرد يبدأ من الجرد الذي قبله. لا تُغيّر الحركات المستوردة نفسها.
+  const invAdj=new Float64Array(nM), counts=S.settings.invCounts||{};
+  Object.keys(counts).filter(k=>idx[k]!=null&&isFinite(counts[k])).sort().forEach(k=>{
+    const j=idx[k]; let s=0; for(let i=0;i<=j;i++) s+=catMov.inventory[i];
+    const d=+counts[k]-s; catMov.inventory[j]+=d; catMov.cogs[j]-=d; invAdj[j]+=d; });
   const catCum={};
   for(const k in catMov){ const cum=new Float64Array(nM); let s=0; for(let i=0;i<nM;i++){ s+=catMov[k][i]; cum[i]=s; } catCum[k]=cum; }
   const periodic = periodic0;
-  M={months,idx,nM,mov,parents,catMov,catCum,periodic,maxD,minD,posAdj,posCogs:!!pmm,invGap,invAnchor};
+  M={months,idx,nM,mov,parents,catMov,catCum,periodic,maxD,minD,posAdj,posCogs:!!pmm,invGap,invAnchor,invAdj};
   // سلاسل شهرية مشتقة
   const ser={netSales:[],otherInc:[],cogs:[],purch:[],opex:[],gp:[],dep:[],fin:[],tax:[],np:[],cash:[]};
   for(const k of OPEX) ser[k]=[];
@@ -696,6 +715,8 @@ function renderStatements(){
   if(M.posCogs) $('#isSub').textContent+=` — تكلفة المبيعات من الكلفة الفعلية لنقاط البيع + التوالف والتسويات (جرد دوري)؛ المشتريات في الفترة ${fmt(movSum('purchases',a,b))}`;
   else if(M.periodic) $('#isSub').textContent+=' — جرد دوري: تكلفة المبيعات = المشتريات (بدون تسوية مخزون)';
 
+  renderCogs(a,b,cur);
+
   // المركز المالي
   const e=b, s0=a-1;
   $('#bsSub').textContent=`كما في نهاية ${monthLabel(M.months[e])} مقارنة ببداية الفترة`;
@@ -746,6 +767,34 @@ function renderStatements(){
     kpi('الرصيد النقدي',fmt(r.cash),'نهاية الفترة',r.cash<0?'bad':''),
     kpi('نسبة التداول',r.current?r.current.toFixed(2):'—','الموجودات / المطلوبات المتداولة',r.current!=null&&r.current<1?'bad':''),
   ].join('');
+}
+// تفصيل تكلفة المبيعات للفترة: بضاعة أول المدة + المشتريات − بضاعة آخر المدة، مع مصدر كل رقم.
+// "المشتريات" هنا = كل ما دخل المخزون أو تحمّل على التكلفة بالقيود (حساب المشتريات + حركات المخزون وتكلفة البضاعة)
+function renderCogs(a,b,cur){
+  const open=bal('inventory',a-1), end=bal('inventory',b), inflow=cur.cogs+(end-open), purch=movSum('purchases',a,b);
+  const sl=arr=>sum(Array.from(arr).slice(a,b+1)), posA=sl(M.posAdj), invA=sl(M.invAdj);
+  const endK=M.months[b], counts=S.settings.invCounts||{}, cnt=counts[endK];
+  $('#cogsSub').textContent=`من ${monthLabel(M.months[a])} إلى ${monthLabel(endK)} — `+(M.periodic
+    ?'جرد دوري: المشتريات تتسجّل بحساب المشتريات، فتكلفة المبيعات = بضاعة أول المدة + المشتريات − بضاعة آخر المدة.'
+    :'جرد مستمر: تكلفة المبيعات من حساب تكلفة البضاعة المباعة بالقيود مباشرة.');
+  const src = cnt!=null ? 'جرد فعلي أدخلتيه' : M.posCogs ? (M.invAnchor?'من كلفة نقاط البيع وصورة المخزون بالنظام':'من كلفة نقاط البيع والتوالف (بدون صورة مخزون)') : 'رصيد حساب المخزون بالدفاتر';
+  const L=(l,v,cls='',ind=false,note='')=>`<tr class="${cls}"><td class="${ind?'ind':''}">${l}${note?` <span class="muted" style="font-size:11.5px">(${note})</span>`:''}</td>${numCell(v)}</tr>`;
+  let h=`<thead><tr><th>البند</th><th class="num">المبلغ</th></tr></thead><tbody>`;
+  h+=L('بضاعة أول المدة',open,'',false,a>0?`رصيد المخزون نهاية ${monthLabel(M.months[a-1])}`:'لا يوجد رصيد قبل أول شهر');
+  h+=L('يُضاف: المشتريات خلال الفترة',inflow);
+  if(Math.abs(purch)>=0.5 && Math.abs(inflow-purch)>=0.5){ h+=L('حساب المشتريات',purch,'',true); h+=L('حركات حساب المخزون وتكلفة البضاعة بالقيود',inflow-purch,'',true); }
+  h+=L('= البضاعة المتاحة للبيع',open+inflow,'tot');
+  h+=L('ينزل: بضاعة آخر المدة',-end,'',false,src);
+  h+=L('= تكلفة المبيعات',cur.cogs,'grand');
+  if(Math.abs(posA)>=0.5) h+=`<tr><td colspan="2" class="muted" style="font-size:12px">منها تحويل ${fmt(posA)} من التكلفة للمخزون حسب كلفة نقاط البيع الفعلية (البضاعة اللي انشرت وما انباعت).</td></tr>`;
+  if(Math.abs(invA)>=0.5) h+=`<tr><td colspan="2" class="muted" style="font-size:12px">تسوية الجرد الفعلي: ${invA>0?'المخزون الفعلي أعلى من الدفاتر بـ':'المخزون الفعلي أقل من الدفاتر بـ'} ${fmt(Math.abs(invA))}، ف${invA>0?'نزلت':'زادت'} تكلفة المبيعات بنفس المبلغ.</td></tr>`;
+  h+=`<tr><td colspan="2" class="muted" style="font-size:12px">هامش الربح الإجمالي: ${pct(cur.ns?cur.gp/cur.ns:null)} — تكلفة المبيعات ${pct(cur.ns?cur.cogs/cur.ns:null)} من صافي المبيعات.</td></tr>`;
+  $('#cogsTable').innerHTML=h+'</tbody>';
+  $('#invCountLbl').textContent=`بضاعة آخر المدة (جرد فعلي) كما في نهاية ${monthLabel(endK)}`;
+  $('#invCountVal').value=cnt??'';
+  $('#invCountVal').placeholder=`بالدفاتر: ${fmt(end-(M.invAdj[b]||0))}`;
+  const ks=Object.keys(counts).sort();
+  $('#invCountList').innerHTML=ks.length?`<div class="sub" style="margin:8px 0 4px">الجرود المحفوظة:</div><div class="row" style="gap:6px">${ks.map(k=>`<span class="chip">${monthLabel(k)}: ${fmt(counts[k])}${M.idx[k]==null?' — خارج البيانات':''}</span>`).join('')}</div>`:'';
 }
 function kpi(l,v,d='',cls=''){ return `<div class="kpi ${cls}"><div class="l">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`; }
 function changeTxt(a,b){ if(!b) return ''; const c=(a-b)/Math.abs(b); return `${c>=0?'▲':'▼'} ${pct(Math.abs(c))} عن الفترة السابقة`; }
@@ -2234,6 +2283,10 @@ $('#mapSearch').oninput=renderMapping; $('#mapFilter').onchange=renderMapping;
 $('#exClosing').onchange=e=>{ S.settings.excludeClosing=e.target.checked; recompute(false); };
 $('#inUnposted').onchange=e=>{ S.settings.includeUnposted=e.target.checked; recompute(false); };
 $('#posCogs').onchange=e=>{ S.settings.posCogs=e.target.checked; recompute(false); };
+$('#invCountSave').onclick=()=>{ const v=numInput($('#invCountVal')); if(v===undefined) return;
+  if(v===null){ toast('اكتب قيمة بضاعة آخر المدة'); $('#invCountVal').focus(); return; }
+  const k=M.months[P.to]; (S.settings.invCounts||(S.settings.invCounts={}))[k]=v; recompute(false); toast(`انحفظ جرد ${monthLabel(k)}`); };
+$('#invCountClear').onclick=()=>{ const k=M.months[P.to]; if(S.settings.invCounts&&S.settings.invCounts[k]!=null){ delete S.settings.invCounts[k]; recompute(false); toast(`انحذف جرد ${monthLabel(k)}`); } };
 $('#bulkApply').onclick=()=>{ const p=normCode($('#bulkPrefix').value), c=$('#bulkCat').value; if(!p) return; let n=0; for(const code in S.accounts) if(code.startsWith(p)){ S.accounts[code].cat=c; S.accounts[code].auto=false; n++; } toast(`تم تحديث ${n} حساب`); recompute(false); };
 $('#scnBtns').addEventListener('click',e=>{ const b=e.target.closest('[data-scn]'); if(b) applyScenario(b.dataset.scn); });
 $('#cmAdd').onclick=()=>{ S.commitments.push({name:'',type:'out',amount:0,start:1,repeat:'once'}); refreshForecast(); };
