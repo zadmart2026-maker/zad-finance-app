@@ -923,12 +923,29 @@ function salesBasis(e){
   const pS=sum(w6.map(p=>p.ns)), pP=sum(w6.map(p=>p.purch)), pC=sum(w6.map(p=>p.cost+p.dmg+p.adj));
   const glPct = serSum('netSales',last12,e)>0 ? serSum('purch',last12,e)/serSum('netSales',last12,e) : 0;
   const autoPurchPct = pS>0 ? pP/pS : glPct;
-  return {h0,hist,posMonths,autoPurchPct,purchSrc:pS>0?'pos':'gl',costPct:pS>0?pC/pS:null};
+  // الأشهر اللي يُبنى عليها الاتجاه: بدون أشهر ما قبل الافتتاح (صفر)، وبدون شهر الافتتاح (جزئي غالباً)
+  // وأشهر التعبئة بعده الأقل من 60% من وسيط المبيعات، وبدون الشهر الحالي إذا ما خلص بعد
+  let ts=0; while(ts<hist.length && !(hist[ts]>0)) ts++;
+  const opened=ts>0 && ts<hist.length;
+  const nz=hist.slice(ts).filter(v=>v>0).sort((x,y)=>x-y), med=nz.length?nz[Math.floor(nz.length/2)]:0;
+  if(opened) ts++;
+  while(ts<hist.length-1 && hist[ts]<0.6*med) ts++;
+  const incomplete = e===M.nM-1 && +M.maxD.slice(8,10)<daysIn(M.months[e]);
+  let te=hist.length-(incomplete?1:0);
+  if(te-ts<3){ ts=0; te=hist.length; }   // بيانات قليلة كتير: نرجع لكل الأشهر
+  return {h0,hist,posMonths,autoPurchPct,purchSrc:pS>0?'pos':'gl',costPct:pS>0?pC/pS:null,
+    trend:{from:h0+ts, to:h0+te-1, skipped:ts, incomplete:te<hist.length}};
+}
+// المبيعات حسب الاتجاه لـ n شهر بعد الشهر e، من أشهر الاتجاه بس. إذا الشهر الحالي ما خلص، بيتوقّعه
+// كمان (مش داخل بالحساب) وبيتجاهله، فأول قيمة بترجع هي الشهر اللي بعد e
+function projSales(B,n,f){
+  const T=B.trend, vals=B.hist.slice(T.from-B.h0,T.to-B.h0+1), skip=T.incomplete?1:0;
+  return project(vals,+M.months[T.from].slice(5)-1,n+skip,f.trend,f.season).slice(skip);
 }
 
 function runForecast(){
   const e=P.to, f=S.fc, n=f.horizon;
-  const B=salesBasis(e), h0=B.h0, startCal=+M.months[h0].slice(5)-1;
+  const B=salesBasis(e);
   const r=ratiosAt(e);
   const keys=Array.from({length:n},(_,k)=>addMonths(M.months[e],k+1));
   // تعديلات يدوية من جدول التنبؤ: S.fc.ov[بند][شهر] تحلّ محل الرقم المحسوب (مفتاحها الشهر فتبقى لو تغيّرت مدة التنبؤ)
@@ -940,7 +957,7 @@ function runForecast(){
     if(oa){ const d=fcDrill(key), share=Object.fromEntries((d?d.rows:[]).map(x=>[x.code,x.share])), base=ovBase[key]=arr.slice();
       keys.forEach((k,i)=>{ for(const c in oa){ const v=oa[c]&&oa[c][k]; if(v!=null&&isFinite(v)){ arr[i]+= +v-base[i]*(share[c]||0); mark(key,i); mark('acct:'+key+'|'+c,i); } } }); }
     return arr; };
-  const sales=ovA('sales',project(B.hist,startCal,n,f.trend,f.season).map(v=>v*(1+f.salesAdj/100)));
+  const sales=ovA('sales',projSales(B,n,f).map(v=>v*(1+f.salesAdj/100)));
   const autoPurchPct=B.autoPurchPct;
   const purchPct=(f.purchPct!=null?f.purchPct/100:autoPurchPct);
   const purch=ovA('purch',sales.map(v=>v*purchPct*(1+f.costAdj/100)));
@@ -1087,7 +1104,7 @@ function refreshForecast(skipCm){
   $('#fcBaseInfo').innerHTML=`نقطة البداية: نهاية ${monthLabel(M.months[P.to])} — رصيد نقدي ${fmt(F.openCash)} ${
     F.cashSrc==='manual'?`<b>(مُدخل يدوياً؛ الدفاتر تقول ${fmt(F.bookCash)} — الفرق ${fmt(F.openCash-F.bookCash)} حركات غير مسجلة في Solid Soft)</b>`
     :F.cashSrc==='bank'?`<b>(معدّل حسب مطابقة البنك حتى ${F.bankE}: الدفاتر ${fmt(F.bookCash)}، تعديل ${fmt(F.bankAdj)})</b>`
-    :'(مجموع حسابات الصناديق والبنوك في Solid Soft)'}، ذمم وشيكات للتحصيل ${fmt(F.openRecv)}، ذمم وشيكات للموردين ${fmt(F.openPay)}. المبيعات تُتوقع من آخر ${Math.min(24,P.to+1)} شهراً${F.basis.posMonths?` (منها ${F.basis.posMonths} من نقاط البيع في قاعدة البيانات)`:''}، ونسبة المشتريات من ${F.basis.purchSrc==='pos'?'مشتريات قاعدة البيانات':'القيود'}.${F.useChq?` الشيكات القائمة: واردة ${fmt(sum(F.chqIn))}، صادرة ${fmt(sum(F.chqOut))} ضمن مدة التنبؤ.`:''}`;
+    :'(مجموع حسابات الصناديق والبنوك في Solid Soft)'}، ذمم وشيكات للتحصيل ${fmt(F.openRecv)}، ذمم وشيكات للموردين ${fmt(F.openPay)}. المبيعات تُتوقع من اتجاه ${F.basis.trend.to-F.basis.trend.from+1} شهراً (${monthLabel(M.months[F.basis.trend.from])} – ${monthLabel(M.months[F.basis.trend.to])})${F.basis.posMonths?`، منها ${F.basis.posMonths} من نقاط البيع في قاعدة البيانات`:''}${F.basis.trend.skipped?`، بدون ${F.basis.trend.skipped} شهر قبل الافتتاح وفترة التعبئة`:''}${F.basis.trend.incomplete?`، وبدون ${monthLabel(M.months[P.to])} لأنه ما خلص بعد`:''}، ونسبة المشتريات من ${F.basis.purchSrc==='pos'?'مشتريات قاعدة البيانات':'القيود'}.${F.useChq?` الشيكات القائمة: واردة ${fmt(sum(F.chqIn))}، صادرة ${fmt(sum(F.chqOut))} ضمن مدة التنبؤ.`:''}`;
   $('#fcKpis').innerHTML=[
     kpi('الرصيد النقدي الحالي',fmt(F.openCash),monthLabel(M.months[P.to])),
     kpi('أدنى رصيد متوقع',fmt(F.minC),monthLabel(F.keys[F.minI]),F.minC<0?'bad':(F.minC<F.buffer?'bad':'good')),
@@ -2140,7 +2157,7 @@ function exportExcel(){
 
   // --- التنبؤ بالكاش فلو: الافتراضات بخلايا B2:B11 وكل الجدول معادلات عليها ---
   const F=FC, n=F.keys.length, fc=S.fc, fS=sheet(), A_={};
-  const SB=salesBasis(b), baseSales=project(SB.hist,+M.months[SB.h0].slice(5)-1,n,fc.trend,fc.season);
+  const SB=salesBasis(b), baseSales=projSales(SB,n,fc);
   const H=Math.min(6,b+1), hs=b-H+1, pastSales=SB.hist.slice(-H), pastPurch=M.ser.purch.slice(hs,b+1);
   fS.set(0,1,'افتراضات التنبؤ'); fS.set(1,1,'القيمة');
   [['salesAdj','تعديل المبيعات عن الاتجاه',fc.salesAdj/100,PCT],['purchPct','المشتريات كنسبة من المبيعات',F.purchPct,PCT],['costAdj','ارتفاع كلفة البضاعة',fc.costAdj/100,PCT],
